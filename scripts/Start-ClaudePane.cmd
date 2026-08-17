@@ -5,7 +5,7 @@ rem
 rem  Startup script for one Claude window: colour the terminal, name the
 rem  console, print a banner, then start Claude.
 rem
-rem    <name>    window name, shown in the title bar and the banner
+rem    <name>    window name, shown in the title bar, prompt and banner
 rem    <1-4>     window number, selects the colour theme
 rem    skip      start Claude with --dangerously-skip-permissions (default)
 rem    safe      start Claude normally, with permission prompts
@@ -17,6 +17,15 @@ rem  shreds any inline multi-statement command. The colour values below are the
 rem  same story: ANSI codes and OSC sequences are full of semicolons, so they
 rem  could never be passed through wt.exe. The caller passes a window number and
 rem  every lookup happens on this side.
+rem
+rem  Two different escape-sequence families are used here:
+rem    SGR  ESC[<n>m       colours the TEXT that follows. 30-37 foreground,
+rem                        90-97 bright foreground, 40-47 and 100-107 the
+rem                        background, 1 bold, 0 reset.
+rem    OSC  ESC]<n>;<v>ST  reconfigures the TERMINAL itself - which RGB values
+rem                        the sixteen colour slots actually are, plus the
+rem                        default foreground, background and cursor.
+rem  SGR picks a slot, OSC decides what colour that slot is.
 rem ---------------------------------------------------------------------------
 
 setlocal EnableDelayedExpansion
@@ -27,6 +36,24 @@ if "%PANE%"=="" set "PANE=Claude"
 set "MODE=%~3"
 if "%MODE%"=="" set "MODE=skip"
 
+rem --- per-window theme ------------------------------------------------------
+rem BG/CUR are OSC colours (the window). SGR is the banner's colour pair.
+rem ACCENT is an SGR foreground code used for this window's prompt.
+set "BG=#101418"
+set "CUR=#e6edf3"
+set "SGR=107;30"
+set "ACCENT=97"
+if "%~2"=="1" ( set "BG=#0d1b2a" & set "CUR=#61afef" & set "SGR=104;97" & set "ACCENT=94" )
+if "%~2"=="2" ( set "BG=#1e1030" & set "CUR=#ff79c6" & set "SGR=105;97" & set "ACCENT=95" )
+if "%~2"=="3" ( set "BG=#2a1e0a" & set "CUR=#f1fa8c" & set "SGR=103;30" & set "ACCENT=93" )
+if "%~2"=="4" ( set "BG=#0b2318" & set "CUR=#50fa7b" & set "SGR=102;30" & set "ACCENT=92" )
+
+rem Colour the shell prompt, so the window is not white-on-tint once Claude
+rem exits. $E is cmd's own escape character inside a PROMPT string, so this
+rem needs no ESC variable: $E[<n>m sets colour, $E[0m resets, $P is the path
+rem and $G is the '>'.
+set "NEWPROMPT=$E[1;%ACCENT%m%PANE%$E[0m $E[90m$P$E[%ACCENT%m$G$E[0m "
+
 rem cmd has no escape-character literal, so borrow one from the prompt command.
 set "ESC="
 for /f "delims=" %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
@@ -35,20 +62,9 @@ title %PANE%
 
 if not defined ESC goto :no_color
 
-rem --- per-window theme: tinted background, matching cursor, banner colour ----
-rem Backgrounds are dark tints rather than saturated fills, so Claude's own
-rem output stays readable on top of them.
-set "BG=#101418"
-set "CUR=#e6edf3"
-set "SGR=107;30"
-if "%~2"=="1" ( set "BG=#0d1b2a" & set "CUR=#61afef" & set "SGR=104;97" )
-if "%~2"=="2" ( set "BG=#1e1030" & set "CUR=#ff79c6" & set "SGR=105;97" )
-if "%~2"=="3" ( set "BG=#2a1e0a" & set "CUR=#f1fa8c" & set "SGR=103;30" )
-if "%~2"=="4" ( set "BG=#0b2318" & set "CUR=#50fa7b" & set "SGR=102;30" )
-
 rem --- vivid 16-colour palette, shared by all four windows -------------------
 rem This is what makes Claude's output colourful instead of white on black:
-rem every coloured thing a CLI prints resolves through these 16 slots.
+rem every coloured thing a CLI prints resolves through these sixteen slots.
 set "OSC=!ESC!]"
 set "ST=!ESC!\"
 
@@ -87,6 +103,11 @@ echo  == %PANE% ==
 echo.
 
 :launch
+rem Carry PROMPT out past endlocal, so the colour survives into the interactive
+rem shell that cmd /k leaves behind after Claude exits. Both values on this line
+rem are expanded before endlocal runs, which is what makes the idiom work.
+endlocal & set "PROMPT=%NEWPROMPT%" & set "MODE=%MODE%"
+
 if /i "%MODE%"=="none" goto :eof
 
 rem 'call' so control returns here, and to this cmd /k prompt, when Claude exits.
