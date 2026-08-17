@@ -1,29 +1,31 @@
 <#
 .SYNOPSIS
-    Opens one Windows Terminal window, split into a perfectly aligned 2x2 grid
-    of four named Claude Code sessions, on the monitor you choose.
+    Opens four separate, named Windows Terminal windows running Claude Code,
+    tiled flush into the four quadrants of the monitor you choose.
 
 .DESCRIPTION
-    Builds a single `wt.exe` invocation that creates a tab and then splits it
-    three times, so Windows Terminal itself computes the geometry. Every split
-    is 50%, so the four panes are exact halves and stay aligned when the window
-    is resized.
+    Four independent Terminal windows, one per quadrant:
 
-    Pane order:
         +-----------+-----------+
         |     1     |     2     |
         +-----------+-----------+
         |     3     |     4     |
         +-----------+-----------+
 
-    After launch the new window is maximized onto the target monitor with a
-    Win32 ShowWindow call, so it fills that screen exactly.
+    Each is a real window - its own title bar, its own taskbar entry, movable
+    and closable on its own - and each runs cmd.
 
-    Each pane's startup script is passed as -EncodedCommand. That is not
-    decoration: wt.exe splits its command line on ';' even inside a quoted
-    argument, so a plain inline command gets shredded at the first semicolon
-    and the fragments are re-read as wt subcommands. Base64 contains no
-    semicolons, spaces, or quotes, so nothing can be re-split.
+    Alignment is done in two steps. Each window is launched with --pos near its
+    quadrant, then moved with SetWindowPos to exact pixel bounds. The second
+    step compensates for the invisible resize border Windows puts around every
+    window: GetWindowRect includes it, so tiling by those numbers leaves a
+    visible gap of roughly 7px between neighbours. The real visible edge comes
+    from DWMWA_EXTENDED_FRAME_BOUNDS, and the difference between the two is
+    added back, which is what makes the four windows sit truly flush.
+
+    Quadrants are computed from the monitor's working area, so windows never
+    hide behind the taskbar, and the halves are derived by subtraction rather
+    than doubling so odd widths and heights still tile exactly.
 
 .PARAMETER Monitor
     Which display to use. Accepts:
@@ -34,30 +36,34 @@
       - a device-name substring, e.g. 'DISPLAY6'
 
 .PARAMETER Titles
-    One to four pane names. Missing names are filled with 'Claude <n>'.
+    One to four window names. Missing names are filled with 'Claude <n>'.
 
 .PARAMETER WorkingDir
-    Starting directory for all four panes. Defaults to the current directory.
+    Starting directory for all four windows. Defaults to the current directory.
+
+.PARAMETER Gap
+    Pixels of space to leave between the tiled windows. Default 0 (flush).
 
 .PARAMETER NoClaude
-    Lay out the grid with plain shells instead of starting Claude. For testing.
+    Tile four plain cmd windows instead of starting Claude. For testing layout.
 
 .PARAMETER DryRun
-    Print the resolved plan and the wt.exe argument list, then exit.
+    Print the resolved plan and each wt.exe argument list, launch nothing.
 
 .EXAMPLE
     .\Open-QuadClaude.ps1
-    Four 'Claude 1'..'Claude 4' panes on the primary monitor.
+    Four 'Claude 1'..'Claude 4' windows on the primary monitor.
 
 .EXAMPLE
     .\Open-QuadClaude.ps1 -Monitor 2 -Titles backend,frontend,tests,notes
-    Named panes on the second monitor from the left.
+    Named windows tiled on the second monitor from the left.
 #>
 [CmdletBinding()]
 param(
     [string]   $Monitor    = 'primary',
     [string[]] $Titles     = @(),
     [string]   $WorkingDir = $PWD.Path,
+    [int]      $Gap        = 0,
     [switch]   $NoClaude,
     [switch]   $DryRun
 )
@@ -65,10 +71,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Background colors for the pane banners, so the four are tellable apart at a glance.
-$PaneColors   = @('DarkCyan', 'DarkMagenta', 'DarkYellow', 'DarkGreen')
-$ProfileName  = 'Claude Pane'
+# Banner colours live in Start-ClaudePane.cmd, keyed by window number. They
+# cannot be passed through here: ANSI colour codes are semicolon-separated and
+# wt.exe splits its command line on ';' even inside a quoted argument.
+$ProfileName  = 'Claude'
 $FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-pane.json'
+$PaneScript   = Join-Path $PSScriptRoot 'Start-ClaudePane.cmd'
 
 function Get-SortedScreens {
     Add-Type -AssemblyName System.Windows.Forms
@@ -107,11 +115,11 @@ function Resolve-TargetScreen {
     throw "Could not resolve monitor '$Spec'. Use 1..$($screens.Count), primary, left, right, portrait, or one of: $names"
 }
 
-function Test-PaneProfileLive {
+function Test-ClaudeProfileLive {
     <#
-        The 'Claude Pane' profile ships as a Terminal fragment, and Terminal
-        only reads fragments at startup. So the profile is usable only if no
-        Terminal process predates the fragment file.
+        The 'Claude' profile ships as a Terminal fragment, and Terminal only
+        reads fragments at startup. So the profile is usable only if no Terminal
+        process predates the fragment file.
     #>
     if (-not (Test-Path -LiteralPath $FragmentPath)) { return $false }
 
@@ -123,62 +131,36 @@ function Test-PaneProfileLive {
     return ($fragmentTime -lt $oldestStart)
 }
 
-function New-PaneScript {
-    param([string]$Title, [string]$Color, [bool]$StartClaude)
+function Get-QuadrantRects {
+    param($WorkingArea, [int]$Gap)
 
-    $safeTitle  = $Title -replace "'", "''"
-    $safeBanner = ("  " + $Title.ToUpper() + "  ") -replace "'", "''"
+    $wa = $WorkingArea
+    # Derive the second half by subtraction, so an odd width or height still
+    # tiles exactly instead of leaving a one-pixel seam.
+    $leftW = [int][math]::Floor(($wa.Width  - $Gap) / 2)
+    $topH  = [int][math]::Floor(($wa.Height - $Gap) / 2)
+    $rightW  = $wa.Width  - $leftW - $Gap
+    $bottomH = $wa.Height - $topH  - $Gap
 
-    $lines = @(
-        "`$Host.UI.RawUI.WindowTitle = '$safeTitle'"
-        "Write-Host ''"
-        "Write-Host '$safeBanner' -ForegroundColor White -BackgroundColor $Color"
-        "Write-Host ''"
+    $x1 = $wa.X
+    $x2 = $wa.X + $leftW + $Gap
+    $y1 = $wa.Y
+    $y2 = $wa.Y + $topH + $Gap
+
+    return @(
+        @{ X = $x1; Y = $y1; W = $leftW;  H = $topH    }   # 1 top-left
+        @{ X = $x2; Y = $y1; W = $rightW; H = $topH    }   # 2 top-right
+        @{ X = $x1; Y = $y2; W = $leftW;  H = $bottomH }   # 3 bottom-left
+        @{ X = $x2; Y = $y2; W = $rightW; H = $bottomH }   # 4 bottom-right
     )
-    if ($StartClaude) { $lines += 'claude' }
-
-    return ($lines -join "`n")
 }
 
-function Add-PaneArgs {
-    param(
-        [System.Collections.Generic.List[string]] $List,
-        [string] $Subcommand,   # 'new-tab' | 'split-pane'
-        [string] $SplitFlag,    # '' | '--vertical' | '--horizontal'
-        [string] $Title,
-        [string] $Color,
-        [string] $Directory,
-        [bool]   $StartClaude,
-        [bool]   $UseProfile
-    )
+function Initialize-Win32 {
+    if ('QuadClaude.Win32' -as [type]) { return }
+    Add-Type -Namespace QuadClaude -Name Win32 -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)]
+public struct RECT { public int Left, Top, Right, Bottom; }
 
-    $List.Add($Subcommand)
-    if ($SplitFlag) { $List.Add($SplitFlag) }
-
-    if ($UseProfile) {
-        # The profile carries closeOnExit and suppressApplicationTitle.
-        $List.Add('--profile'); $List.Add($ProfileName)
-    } else {
-        # Best the command line alone can do: keep Claude from renaming the pane.
-        $List.Add('--suppressApplicationTitle')
-    }
-
-    $List.Add('--title');             $List.Add($Title)
-    $List.Add('--startingDirectory'); $List.Add($Directory)
-
-    $encoded = [Convert]::ToBase64String(
-        [Text.Encoding]::Unicode.GetBytes((New-PaneScript -Title $Title -Color $Color -StartClaude $StartClaude))
-    )
-    $List.Add('powershell.exe')
-    $List.Add('-NoLogo')
-    $List.Add('-NoExit')
-    $List.Add('-EncodedCommand')
-    $List.Add($encoded)
-}
-
-function Get-TerminalWindowHandles {
-    if (-not ('QuadClaude.Win32' -as [type])) {
-        Add-Type -Namespace QuadClaude -Name Win32 -MemberDefinition @'
 [DllImport("user32.dll")]
 public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -186,9 +168,15 @@ public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder tex
 [DllImport("user32.dll")]
 public static extern bool IsWindowVisible(IntPtr hWnd);
 [DllImport("user32.dll")]
+public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+[DllImport("user32.dll")]
+public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+[DllImport("user32.dll")]
 public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")]
 public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("dwmapi.dll")]
+public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT r, int size);
 public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
 public static System.Collections.Generic.List<IntPtr> FindByClass(string cls) {
@@ -202,15 +190,55 @@ public static System.Collections.Generic.List<IntPtr> FindByClass(string cls) {
     }, IntPtr.Zero);
     return found;
 }
-'@
+
+// Place a window so its VISIBLE edges land exactly on the given rectangle.
+// GetWindowRect includes the invisible resize border; DWMWA_EXTENDED_FRAME_BOUNDS
+// (9) does not. The difference is the padding to add back.
+public static string PlaceVisible(IntPtr hWnd, int x, int y, int w, int h) {
+    ShowWindow(hWnd, 9);            // SW_RESTORE: never tile a maximized window
+    RECT wr, fr;
+    GetWindowRect(hWnd, out wr);
+    int dx = 0, dy = 0, dw = 0, dh = 0;
+    if (DwmGetWindowAttribute(hWnd, 9, out fr, 16) == 0) {
+        dx = fr.Left - wr.Left;
+        dy = fr.Top  - wr.Top;
+        dw = (wr.Right - wr.Left) - (fr.Right - fr.Left);
+        dh = (wr.Bottom - wr.Top) - (fr.Bottom - fr.Top);
     }
+    SetWindowPos(hWnd, IntPtr.Zero, x - dx, y - dy, w + dw, h + dh, 0x0004); // SWP_NOZORDER
+    return "border dx=" + dx + " dy=" + dy + " dw=" + dw + " dh=" + dh;
+}
+'@
+}
+
+function Get-TerminalWindowHandles {
+    Initialize-Win32
     return [QuadClaude.Win32]::FindByClass('CASCADIA_HOSTING_WINDOW_CLASS')
+}
+
+function Get-SpaceSafePath {
+    <#
+        cmd.exe /k mishandles quoted paths in some argument shapes. If the
+        script path contains a space, hand cmd the 8.3 short path instead.
+    #>
+    param([string]$Path)
+
+    if ($Path -notmatch '\s') { return $Path }
+    try {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        $short = $fso.GetFile($Path).ShortPath
+        if ($short) { return $short }
+    } catch { }
+    return $Path   # 8.3 names disabled on this volume; quoting is the best we can do
 }
 
 # --- resolve inputs -----------------------------------------------------------
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     throw "Windows Terminal (wt.exe) was not found on PATH. Install it from the Microsoft Store."
+}
+if (-not (Test-Path -LiteralPath $PaneScript)) {
+    throw "Missing $PaneScript - it ships alongside this script."
 }
 
 $screen = Resolve-TargetScreen -Spec $Monitor
@@ -230,75 +258,89 @@ for ($i = 0; $i -lt 4; $i++) {
     }
 }
 
-$startClaude = -not $NoClaude.IsPresent
-
-# Install the profile fragment on first run so pane exits are handled the way
-# the profile says, rather than leaving Terminal's exit notice in the pane.
+# Install the profile fragment on first run, so window exits follow the profile
+# instead of leaving Terminal's exit notice sitting in the window.
 if (-not (Test-Path -LiteralPath $FragmentPath)) {
     $installer = Join-Path $PSScriptRoot 'Install-ClaudePaneProfile.ps1'
     if (Test-Path -LiteralPath $installer) { & $installer | Out-Null }
 }
-$useProfile = Test-PaneProfileLive
+$useProfile = Test-ClaudeProfileLive
 
-# --- build the wt.exe command -------------------------------------------------
+$rects   = Get-QuadrantRects -WorkingArea $screen.WorkingArea -Gap $Gap
+$paneCmd = Get-SpaceSafePath -Path $PaneScript
 
-$wa = $screen.WorkingArea
-# Land just inside the target monitor; the maximize below snaps it to the edges.
-$posX = $wa.X + 24
-$posY = $wa.Y + 24
+function New-WtArgs {
+    param([int]$Index)
 
-$a = New-Object System.Collections.Generic.List[string]
-$a.Add("--pos=$posX,$posY")     # '=' form: the value may legitimately start with '-'
-$a.Add('--window=-1')           # always a brand new window
-
-# 1 fills the tab; split right for 2; split 2 down for 4; back to the left
-# column; split it down for 3. Every split is 50%, so the grid is exact.
-Add-PaneArgs -List $a -Subcommand 'new-tab'    -SplitFlag ''             -Title $names[0] -Color $PaneColors[0] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
-$a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--vertical'   -Title $names[1] -Color $PaneColors[1] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
-$a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[3] -Color $PaneColors[3] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
-$a.Add(';')
-$a.Add('move-focus'); $a.Add('left')
-$a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[2] -Color $PaneColors[2] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
-$a.Add(';')
-$a.Add('move-focus'); $a.Add('up')   # end up focused on pane 1
+    $a = New-Object System.Collections.Generic.List[string]
+    $a.Add("--pos=$($rects[$Index].X),$($rects[$Index].Y)")   # '=' form: value may start with '-'
+    $a.Add('--window=-1')                                     # always a brand new window
+    $a.Add('new-tab')
+    if ($useProfile) {
+        # The profile carries closeOnExit and suppressApplicationTitle.
+        $a.Add('--profile'); $a.Add($ProfileName)
+    } else {
+        # Best the command line alone can do: keep Claude from renaming the window.
+        $a.Add('--suppressApplicationTitle')
+    }
+    $a.Add('--title');             $a.Add($names[$Index])
+    $a.Add('--startingDirectory'); $a.Add($dir)
+    $a.Add('cmd.exe')
+    $a.Add('/k')
+    $a.Add($paneCmd)
+    $a.Add($names[$Index])
+    $a.Add(($Index + 1).ToString())
+    if ($NoClaude) { $a.Add('-noclaude') }
+    return $a
+}
 
 if ($DryRun) {
-    Write-Host "Target monitor : $($screen.DeviceName)  bounds=$($screen.Bounds)  primary=$($screen.Primary)"
-    Write-Host "Window position: $posX,$posY  (then maximized)"
-    Write-Host "Panes          : $($names -join ' | ')"
+    Write-Host "Target monitor : $($screen.DeviceName)  working area=$($screen.WorkingArea)  primary=$($screen.Primary)"
     Write-Host "Profile        : $(if ($useProfile) { "'$ProfileName' (fragment loaded)" } else { 'default (fragment not loaded yet)' })"
-    Write-Host "Claude         : $(if ($startClaude) { 'yes' } else { 'no (-NoClaude)' })"
+    Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } else { 'yes' })"
+    Write-Host "Gap            : $Gap px"
     Write-Host ''
-    Write-Host 'Pane script (pane 1, before base64):'
-    (New-PaneScript -Title $names[0] -Color $PaneColors[0] -StartClaude $startClaude) -split "`n" | ForEach-Object { "  $_" }
-    Write-Host ''
-    Write-Host 'wt.exe arguments:'
-    $a | ForEach-Object { "  $_" }
+    for ($i = 0; $i -lt 4; $i++) {
+        $r = $rects[$i]
+        Write-Host "Window $($i + 1): '$($names[$i])'  ->  x=$($r.X) y=$($r.Y) $($r.W)x$($r.H)"
+        Write-Host ('  wt.exe ' + ((New-WtArgs -Index $i) -join ' '))
+    }
     return
 }
 
-# --- launch and place ---------------------------------------------------------
+# --- launch and tile ----------------------------------------------------------
 
-$before = @(Get-TerminalWindowHandles)
+Initialize-Win32
+$placed = @()
 
-& wt.exe @a
+for ($i = 0; $i -lt 4; $i++) {
+    $before = @(Get-TerminalWindowHandles)
 
-$new = $null
-$deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 250
-    $candidates = @(Get-TerminalWindowHandles | Where-Object { $before -notcontains $_ })
-    if ($candidates.Count -gt 0) { $new = $candidates[-1]; break }
+    & wt.exe @(New-WtArgs -Index $i)
+
+    $new = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+        $candidates = @(Get-TerminalWindowHandles | Where-Object { $before -notcontains $_ })
+        if ($candidates.Count -gt 0) { $new = $candidates[-1]; break }
+    }
+
+    if (-not $new) {
+        Write-Warning "Window $($i + 1) ('$($names[$i])') did not appear in time; it was not tiled."
+        continue
+    }
+
+    $r = $rects[$i]
+    Start-Sleep -Milliseconds 250          # let Terminal finish its own initial sizing
+    $detail = [QuadClaude.Win32]::PlaceVisible($new, $r.X, $r.Y, $r.W, $r.H)
+    Write-Verbose "Window $($i + 1) '$($names[$i])': $detail"
+    $placed += $new
 }
 
-if ($new) {
-    Start-Sleep -Milliseconds 400          # let the four panes finish spawning
-    [void][QuadClaude.Win32]::ShowWindow($new, 3)   # SW_MAXIMIZE
-    [void][QuadClaude.Win32]::SetForegroundWindow($new)
-    Write-Host "Opened 2x2 grid on $($screen.DeviceName): $($names -join ' | ')"
-} else {
-    Write-Warning "Terminal launched but its window was not found in time; it was not maximized."
+# Focus window 1 last, so the grid ends up with the top-left window active.
+if ($placed.Count -gt 0) {
+    [void][QuadClaude.Win32]::SetForegroundWindow($placed[0])
 }
+
+Write-Host "Tiled $($placed.Count) window(s) on $($screen.DeviceName): $($names -join ' | ')"

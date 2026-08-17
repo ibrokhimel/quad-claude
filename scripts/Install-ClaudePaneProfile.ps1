@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Installs the 'Claude Pane' Windows Terminal profile as a fragment extension.
+    Installs the 'Claude' Windows Terminal profile as a fragment extension.
 
 .DESCRIPTION
     Windows Terminal reads extra profiles from JSON "fragments" dropped into
@@ -12,20 +12,20 @@
 
     The profile exists to control two things the wt.exe command line cannot:
 
-      closeOnExit              What a pane does when its process ends. Without
+      closeOnExit              What a window does when its shell ends. Without
                                this you get the "[process exited] ... you can
                                configure this in your profile settings" notice
-                               left sitting in the pane.
-      suppressApplicationTitle Stops Claude from renaming the pane, so the name
-                               you gave the pane is the name that stays on it.
+                               left sitting in the window.
+      suppressApplicationTitle Stops Claude from renaming the window, so the
+                               name you gave it is the name that stays on it.
 
 .PARAMETER CloseOnExit
-    graceful (default) - close the pane on a clean exit, keep it open (with the
-                         exit notice) if the process crashed or was killed, so
-                         you can still read what happened.
-    always             - always close the pane, no notice, ever. Quietest, but
-                         a crashed session vanishes before you can read it.
-    never              - always keep the pane and show the notice.
+    graceful (default) - close the window on a clean exit, keep it open (with
+                         the exit notice) if the shell crashed or was killed,
+                         so you can still read what happened.
+    always             - always close the window, no notice, ever. Quietest,
+                         but a crashed session vanishes before you can read it.
+    never              - always keep the window and show the notice.
 
 .PARAMETER Uninstall
     Remove the fragment.
@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 
 $FragmentDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude'
 $FragmentPath = Join-Path $FragmentDir 'claude-pane.json'
-$ProfileName  = 'Claude Pane'
+$ProfileName  = 'Claude'
 
 if ($Uninstall) {
     if (Test-Path -LiteralPath $FragmentPath) {
@@ -63,7 +63,7 @@ $fragment = [ordered]@{
     profiles = @(
         [ordered]@{
             name                     = $ProfileName
-            commandline              = 'powershell.exe -NoLogo -NoExit'
+            commandline              = 'cmd.exe'
             closeOnExit              = $CloseOnExit
             suppressApplicationTitle = $true
             historySize              = 20000
