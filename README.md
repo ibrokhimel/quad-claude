@@ -46,8 +46,28 @@ primary monitor, starting in the current directory.
 | `-Titles` | one to four window names |
 | `-WorkingDir` | starting directory for all four windows |
 | `-Gap` | pixels between windows; default `0` |
+| `-SkipPermissions` | start Claude with `--dangerously-skip-permissions`; on by default, `-SkipPermissions:$false` to opt out |
 | `-NoClaude` | tile four plain `cmd` windows instead of starting Claude |
 | `-DryRun` | print the plan and the `wt.exe` arguments, launch nothing |
+
+`--dangerously-skip-permissions` does not skip the first-run workspace trust
+prompt — that is a separate check and still wants one Enter per window the first
+time you use a folder.
+
+## Colour
+
+Each window writes its own theme at startup with OSC escape sequences: `OSC 4`
+for the sixteen palette slots, `OSC 10/11/12` for foreground, background and
+cursor. Every coloured thing a CLI prints resolves through those sixteen slots,
+which is what makes Claude's output colourful instead of white on black.
+
+Escape sequences rather than a Terminal colour scheme, on purpose: schemes live
+in the profile fragment, fragments only load at Terminal startup, and OSC applies
+to the live session immediately.
+
+Backgrounds are dark tints — navy, purple, amber, green — so output stays
+readable on top, and each window is identifiable at a glance. All four share one
+vivid palette. It all lives in `scripts/Start-ClaudePane.cmd`.
 
 ## Why it is not just four `wt --pos` calls
 
@@ -95,5 +115,5 @@ every Terminal window once. Until then the windows still open and tile normally.
 |---|---|
 | `SKILL.md` | the skill definition Claude reads |
 | `scripts/Open-QuadClaude.ps1` | resolves the monitor, launches and tiles the four windows |
-| `scripts/Start-ClaudePane.cmd` | per-window startup: title, colour banner, launch Claude |
+| `scripts/Start-ClaudePane.cmd` | per-window startup: colour theme, title, banner, launch Claude |
 | `scripts/Install-ClaudePaneProfile.ps1` | installs/removes the Terminal profile fragment |

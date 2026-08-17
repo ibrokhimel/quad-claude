@@ -1,43 +1,97 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem  Start-ClaudePane.cmd  <name> [1-4] [-noclaude]
+rem  Start-ClaudePane.cmd  <name> <1-4> [skip|safe|none]
 rem
-rem  Startup script for one Claude window: name the console, print a coloured
-rem  banner so the window is identifiable at a glance, then start Claude.
+rem  Startup script for one Claude window: colour the terminal, name the
+rem  console, print a banner, then start Claude.
+rem
+rem    <name>    window name, shown in the title bar and the banner
+rem    <1-4>     window number, selects the colour theme
+rem    skip      start Claude with --dangerously-skip-permissions (default)
+rem    safe      start Claude normally, with permission prompts
+rem    none      do not start Claude, just leave a shell (layout testing)
 rem
 rem  Lives in its own file rather than inline in the wt.exe command line because
 rem  wt.exe splits its command line on ';' even inside a quoted argument, which
-rem  shreds any inline multi-statement command.
-rem
-rem  The colour table lives here for the same reason: ANSI colour codes are
-rem  semicolon-separated, so passing one through wt.exe would split the command.
-rem  The caller passes a window number and the lookup happens on this side.
+rem  shreds any inline multi-statement command. The colour values below are the
+rem  same story: ANSI codes and OSC sequences are full of semicolons, so they
+rem  could never be passed through wt.exe. The caller passes a window number and
+rem  every lookup happens on this side.
 rem ---------------------------------------------------------------------------
+
+setlocal EnableDelayedExpansion
 
 set "PANE=%~1"
 if "%PANE%"=="" set "PANE=Claude"
 
-set "SGR=107;30"
-if "%~2"=="1" set "SGR=104;97"
-if "%~2"=="2" set "SGR=105;97"
-if "%~2"=="3" set "SGR=103;30"
-if "%~2"=="4" set "SGR=102;30"
-
-title %PANE%
+set "MODE=%~3"
+if "%MODE%"=="" set "MODE=skip"
 
 rem cmd has no escape-character literal, so borrow one from the prompt command.
 set "ESC="
 for /f "delims=" %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
 
+title %PANE%
+
+if not defined ESC goto :no_color
+
+rem --- per-window theme: tinted background, matching cursor, banner colour ----
+rem Backgrounds are dark tints rather than saturated fills, so Claude's own
+rem output stays readable on top of them.
+set "BG=#101418"
+set "CUR=#e6edf3"
+set "SGR=107;30"
+if "%~2"=="1" ( set "BG=#0d1b2a" & set "CUR=#61afef" & set "SGR=104;97" )
+if "%~2"=="2" ( set "BG=#1e1030" & set "CUR=#ff79c6" & set "SGR=105;97" )
+if "%~2"=="3" ( set "BG=#2a1e0a" & set "CUR=#f1fa8c" & set "SGR=103;30" )
+if "%~2"=="4" ( set "BG=#0b2318" & set "CUR=#50fa7b" & set "SGR=102;30" )
+
+rem --- vivid 16-colour palette, shared by all four windows -------------------
+rem This is what makes Claude's output colourful instead of white on black:
+rem every coloured thing a CLI prints resolves through these 16 slots.
+set "OSC=!ESC!]"
+set "ST=!ESC!\"
+
+set "P="
+set "P=!P!!OSC!4;0;#21262d!ST!"
+set "P=!P!!OSC!4;1;#ff5555!ST!"
+set "P=!P!!OSC!4;2;#50fa7b!ST!"
+set "P=!P!!OSC!4;3;#f1fa8c!ST!"
+set "P=!P!!OSC!4;4;#61afef!ST!"
+set "P=!P!!OSC!4;5;#ff79c6!ST!"
+set "P=!P!!OSC!4;6;#8be9fd!ST!"
+set "P=!P!!OSC!4;7;#e6edf3!ST!"
+set "P=!P!!OSC!4;8;#6272a4!ST!"
+set "P=!P!!OSC!4;9;#ff6e6e!ST!"
+set "P=!P!!OSC!4;10;#69ff94!ST!"
+set "P=!P!!OSC!4;11;#ffffa5!ST!"
+set "P=!P!!OSC!4;12;#7aa2f7!ST!"
+set "P=!P!!OSC!4;13;#ff92df!ST!"
+set "P=!P!!OSC!4;14;#a4ffff!ST!"
+set "P=!P!!OSC!4;15;#ffffff!ST!"
+set "P=!P!!OSC!10;#e6edf3!ST!"
+set "P=!P!!OSC!11;!BG!!ST!"
+set "P=!P!!OSC!12;!CUR!!ST!"
+
+<nul set /p "=!P!"
+cls
+
 echo.
-if defined ESC (
-    echo  %ESC%[%SGR%m  %PANE%  %ESC%[0m
-) else (
-    echo  == %PANE% ==
-)
+echo  !ESC![%SGR%m  %PANE%  !ESC![0m
+echo.
+goto :launch
+
+:no_color
+echo.
+echo  == %PANE% ==
 echo.
 
-if /i "%~3"=="-noclaude" goto :eof
+:launch
+if /i "%MODE%"=="none" goto :eof
 
 rem 'call' so control returns here, and to this cmd /k prompt, when Claude exits.
-call claude
+if /i "%MODE%"=="safe" (
+    call claude
+) else (
+    call claude --dangerously-skip-permissions
+)

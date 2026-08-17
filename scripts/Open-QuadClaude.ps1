@@ -44,6 +44,10 @@
 .PARAMETER Gap
     Pixels of space to leave between the tiled windows. Default 0 (flush).
 
+.PARAMETER SkipPermissions
+    Start Claude with --dangerously-skip-permissions. On by default; use
+    -SkipPermissions:$false for sessions that should still prompt.
+
 .PARAMETER NoClaude
     Tile four plain cmd windows instead of starting Claude. For testing layout.
 
@@ -64,6 +68,7 @@ param(
     [string[]] $Titles     = @(),
     [string]   $WorkingDir = $PWD.Path,
     [int]      $Gap        = 0,
+    [bool]     $SkipPermissions = $true,
     [switch]   $NoClaude,
     [switch]   $DryRun
 )
@@ -290,14 +295,16 @@ function New-WtArgs {
     $a.Add($paneCmd)
     $a.Add($names[$Index])
     $a.Add(($Index + 1).ToString())
-    if ($NoClaude) { $a.Add('-noclaude') }
+    if ($NoClaude)             { $a.Add('none') }
+    elseif ($SkipPermissions)  { $a.Add('skip') }
+    else                       { $a.Add('safe') }
     return $a
 }
 
 if ($DryRun) {
     Write-Host "Target monitor : $($screen.DeviceName)  working area=$($screen.WorkingArea)  primary=$($screen.Primary)"
     Write-Host "Profile        : $(if ($useProfile) { "'$ProfileName' (fragment loaded)" } else { 'default (fragment not loaded yet)' })"
-    Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } else { 'yes' })"
+    Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } elseif ($SkipPermissions) { 'yes, --dangerously-skip-permissions' } else { 'yes, with permission prompts' })"
     Write-Host "Gap            : $Gap px"
     Write-Host ''
     for ($i = 0; $i -lt 4; $i++) {

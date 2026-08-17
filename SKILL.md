@@ -38,8 +38,13 @@ primary monitor, all starting in the current directory.
 | `-Titles` | one to four window names; missing ones fill in as `Claude <n>` |
 | `-WorkingDir` | starting directory for all four windows; defaults to the current directory |
 | `-Gap` | pixels between the tiled windows; default `0` (flush) |
+| `-SkipPermissions` | start Claude with `--dangerously-skip-permissions`. **On by default**; pass `-SkipPermissions:$false` for sessions that should still prompt |
 | `-NoClaude` | tile four plain cmd windows instead of starting Claude - use this to test layout changes |
 | `-DryRun` | print the resolved plan and each `wt.exe` argument list, launch nothing |
+
+`--dangerously-skip-permissions` does **not** skip the first-run workspace trust
+prompt ("Is this a project you trust?"). That is a separate check, and it still
+needs one Enter per window the first time a folder is used.
 
 Always test layout changes with `-NoClaude` first. Four real sessions is a lot
 to throw away because a window landed wrong.
@@ -80,6 +85,23 @@ with no seam.
 
 A correct run on a 1920x1080 screen (1032px work area) produces four windows of
 exactly 960x516 at `0,0`, `960,0`, `0,516`, `960,516`.
+
+## Colour
+
+Each window applies its own theme at startup by writing OSC escape sequences:
+`OSC 4` for the sixteen palette slots, `OSC 10/11/12` for foreground, background
+and cursor. Every colour a CLI prints resolves through those sixteen slots, so
+setting them is what makes Claude's output colourful rather than white on black.
+
+This is deliberately done with escape sequences rather than a Terminal colour
+scheme. A scheme lives in the profile fragment, and fragments only load when
+Terminal starts, so a scheme would not apply until the user had closed every
+Terminal window. OSC sequences apply to the live session immediately.
+
+Backgrounds are dark tints, one per window, so Claude's output stays readable
+on top: navy, purple, amber, green for windows 1-4. The banner colour matches.
+All four share one vivid palette. Everything is in `Start-ClaudePane.cmd` -
+change it there, in one place.
 
 ## Two traps worth remembering
 
