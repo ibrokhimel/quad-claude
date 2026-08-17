@@ -5,8 +5,9 @@
 
 .DESCRIPTION
     Builds a single `wt.exe` invocation that creates a tab and then splits it
-    three times, so Windows Terminal itself computes the geometry. The four
-    panes are exact halves and stay aligned when the window is resized.
+    three times, so Windows Terminal itself computes the geometry. Every split
+    is 50%, so the four panes are exact halves and stay aligned when the window
+    is resized.
 
     Pane order:
         +-----------+-----------+
@@ -17,6 +18,12 @@
 
     After launch the new window is maximized onto the target monitor with a
     Win32 ShowWindow call, so it fills that screen exactly.
+
+    Each pane's startup script is passed as -EncodedCommand. That is not
+    decoration: wt.exe splits its command line on ';' even inside a quoted
+    argument, so a plain inline command gets shredded at the first semicolon
+    and the fragments are re-read as wt subcommands. Base64 contains no
+    semicolons, spaces, or quotes, so nothing can be re-split.
 
 .PARAMETER Monitor
     Which display to use. Accepts:
@@ -36,7 +43,7 @@
     Lay out the grid with plain shells instead of starting Claude. For testing.
 
 .PARAMETER DryRun
-    Print the wt.exe argument list and exit without launching anything.
+    Print the resolved plan and the wt.exe argument list, then exit.
 
 .EXAMPLE
     .\Open-QuadClaude.ps1
@@ -59,7 +66,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Background colors for the pane banners, so the four are tellable apart at a glance.
-$PaneColors = @('DarkCyan', 'DarkMagenta', 'DarkYellow', 'DarkGreen')
+$PaneColors   = @('DarkCyan', 'DarkMagenta', 'DarkYellow', 'DarkGreen')
+$ProfileName  = 'Claude Pane'
+$FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-pane.json'
 
 function Get-SortedScreens {
     Add-Type -AssemblyName System.Windows.Forms
@@ -98,27 +107,37 @@ function Resolve-TargetScreen {
     throw "Could not resolve monitor '$Spec'. Use 1..$($screens.Count), primary, left, right, portrait, or one of: $names"
 }
 
-function ConvertTo-PaneCommand {
-    param(
-        [string] $Title,
-        [string] $Color,
-        [bool]   $StartClaude
-    )
+function Test-PaneProfileLive {
+    <#
+        The 'Claude Pane' profile ships as a Terminal fragment, and Terminal
+        only reads fragments at startup. So the profile is usable only if no
+        Terminal process predates the fragment file.
+    #>
+    if (-not (Test-Path -LiteralPath $FragmentPath)) { return $false }
 
-    # Single quotes are the only metacharacter that can break out of the inner
-    # -Command string, so double them the way PowerShell expects.
-    $safeTitle = $Title -replace "'", "''"
-    $banner    = "  " + $Title.ToUpper() + "  "
+    $procs = @(Get-Process WindowsTerminal -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { return $true }
 
-    $parts = @(
+    $oldestStart  = ($procs | Sort-Object StartTime | Select-Object -First 1).StartTime
+    $fragmentTime = (Get-Item -LiteralPath $FragmentPath).LastWriteTime
+    return ($fragmentTime -lt $oldestStart)
+}
+
+function New-PaneScript {
+    param([string]$Title, [string]$Color, [bool]$StartClaude)
+
+    $safeTitle  = $Title -replace "'", "''"
+    $safeBanner = ("  " + $Title.ToUpper() + "  ") -replace "'", "''"
+
+    $lines = @(
         "`$Host.UI.RawUI.WindowTitle = '$safeTitle'"
         "Write-Host ''"
-        "Write-Host '$($banner -replace "'", "''")' -ForegroundColor White -BackgroundColor $Color"
+        "Write-Host '$safeBanner' -ForegroundColor White -BackgroundColor $Color"
         "Write-Host ''"
     )
-    if ($StartClaude) { $parts += 'claude' }
+    if ($StartClaude) { $lines += 'claude' }
 
-    return ($parts -join '; ')
+    return ($lines -join "`n")
 }
 
 function Add-PaneArgs {
@@ -129,18 +148,32 @@ function Add-PaneArgs {
         [string] $Title,
         [string] $Color,
         [string] $Directory,
-        [bool]   $StartClaude
+        [bool]   $StartClaude,
+        [bool]   $UseProfile
     )
 
     $List.Add($Subcommand)
     if ($SplitFlag) { $List.Add($SplitFlag) }
-    $List.Add('--title');                    $List.Add($Title)
-    $List.Add('--suppressApplicationTitle')
-    $List.Add('--startingDirectory');        $List.Add($Directory)
+
+    if ($UseProfile) {
+        # The profile carries closeOnExit and suppressApplicationTitle.
+        $List.Add('--profile'); $List.Add($ProfileName)
+    } else {
+        # Best the command line alone can do: keep Claude from renaming the pane.
+        $List.Add('--suppressApplicationTitle')
+    }
+
+    $List.Add('--title');             $List.Add($Title)
+    $List.Add('--startingDirectory'); $List.Add($Directory)
+
+    $encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes((New-PaneScript -Title $Title -Color $Color -StartClaude $StartClaude))
+    )
     $List.Add('powershell.exe')
+    $List.Add('-NoLogo')
     $List.Add('-NoExit')
-    $List.Add('-Command')
-    $List.Add((ConvertTo-PaneCommand -Title $Title -Color $Color -StartClaude $StartClaude))
+    $List.Add('-EncodedCommand')
+    $List.Add($encoded)
 }
 
 function Get-TerminalWindowHandles {
@@ -199,6 +232,14 @@ for ($i = 0; $i -lt 4; $i++) {
 
 $startClaude = -not $NoClaude.IsPresent
 
+# Install the profile fragment on first run so pane exits are handled the way
+# the profile says, rather than leaving Terminal's exit notice in the pane.
+if (-not (Test-Path -LiteralPath $FragmentPath)) {
+    $installer = Join-Path $PSScriptRoot 'Install-ClaudePaneProfile.ps1'
+    if (Test-Path -LiteralPath $installer) { & $installer | Out-Null }
+}
+$useProfile = Test-PaneProfileLive
+
 # --- build the wt.exe command -------------------------------------------------
 
 $wa = $screen.WorkingArea
@@ -212,22 +253,27 @@ $a.Add('--window=-1')           # always a brand new window
 
 # 1 fills the tab; split right for 2; split 2 down for 4; back to the left
 # column; split it down for 3. Every split is 50%, so the grid is exact.
-Add-PaneArgs -List $a -Subcommand 'new-tab'    -SplitFlag ''             -Title $names[0] -Color $PaneColors[0] -Directory $dir -StartClaude $startClaude
+Add-PaneArgs -List $a -Subcommand 'new-tab'    -SplitFlag ''             -Title $names[0] -Color $PaneColors[0] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
 $a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--vertical'   -Title $names[1] -Color $PaneColors[1] -Directory $dir -StartClaude $startClaude
+Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--vertical'   -Title $names[1] -Color $PaneColors[1] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
 $a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[3] -Color $PaneColors[3] -Directory $dir -StartClaude $startClaude
+Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[3] -Color $PaneColors[3] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
 $a.Add(';')
 $a.Add('move-focus'); $a.Add('left')
 $a.Add(';')
-Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[2] -Color $PaneColors[2] -Directory $dir -StartClaude $startClaude
+Add-PaneArgs -List $a -Subcommand 'split-pane' -SplitFlag '--horizontal' -Title $names[2] -Color $PaneColors[2] -Directory $dir -StartClaude $startClaude -UseProfile $useProfile
 $a.Add(';')
 $a.Add('move-focus'); $a.Add('up')   # end up focused on pane 1
 
 if ($DryRun) {
     Write-Host "Target monitor : $($screen.DeviceName)  bounds=$($screen.Bounds)  primary=$($screen.Primary)"
-    Write-Host "Window position: $posX,$posY"
+    Write-Host "Window position: $posX,$posY  (then maximized)"
     Write-Host "Panes          : $($names -join ' | ')"
+    Write-Host "Profile        : $(if ($useProfile) { "'$ProfileName' (fragment loaded)" } else { 'default (fragment not loaded yet)' })"
+    Write-Host "Claude         : $(if ($startClaude) { 'yes' } else { 'no (-NoClaude)' })"
+    Write-Host ''
+    Write-Host 'Pane script (pane 1, before base64):'
+    (New-PaneScript -Title $names[0] -Color $PaneColors[0] -StartClaude $startClaude) -split "`n" | ForEach-Object { "  $_" }
     Write-Host ''
     Write-Host 'wt.exe arguments:'
     $a | ForEach-Object { "  $_" }
@@ -252,7 +298,7 @@ if ($new) {
     Start-Sleep -Milliseconds 400          # let the four panes finish spawning
     [void][QuadClaude.Win32]::ShowWindow($new, 3)   # SW_MAXIMIZE
     [void][QuadClaude.Win32]::SetForegroundWindow($new)
-    Write-Host "Opened 2x2 Claude grid on $($screen.DeviceName): $($names -join ' | ')"
+    Write-Host "Opened 2x2 grid on $($screen.DeviceName): $($names -join ' | ')"
 } else {
     Write-Warning "Terminal launched but its window was not found in time; it was not maximized."
 }
