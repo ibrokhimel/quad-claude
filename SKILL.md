@@ -5,8 +5,8 @@ description: Use when the user wants several Claude Code sessions open side by s
 
 # Quad Claude
 
-Four separate Windows Terminal windows running Claude Code, tiled flush into the
-quadrants of whichever monitor the user names.
+Separate Windows Terminal windows running Claude Code, tiled flush across
+whichever monitor the user names. Four by default; `-Count` takes 1 to 16.
 
 ```
 +-----------+-----------+
@@ -16,7 +16,7 @@ quadrants of whichever monitor the user names.
 +-----------+-----------+
 ```
 
-They are four real windows, not panes in one window: each has its own title bar
+They are real windows, not panes in one window: each has its own title bar
 showing its name, its own taskbar entry, and can be moved or closed on its own.
 The shell is `cmd`.
 
@@ -152,10 +152,18 @@ scheme. A scheme lives in the profile fragment, and fragments only load when
 Terminal starts, so a scheme would not apply until the user had closed every
 Terminal window. OSC sequences apply to the live session immediately.
 
-Backgrounds are dark tints, one per window, so Claude's output stays readable
-on top: navy, purple, amber, green for windows 1-4. The banner colour matches.
-All four share one vivid palette. Everything is in `Start-ClaudePane.cmd` -
-change it there, in one place.
+All windows share one neutral dark background (`#0d1117`). Per-window tints were
+tried and dropped: they cut the contrast of everything Claude printed on top,
+and identity is better carried by a coloured accent than by washing the whole
+surface. Each window's accent shows in its banner and its shell prompt, and the
+accents cycle every four.
+
+The shell prompt is coloured too, with SGR codes in the `PROMPT` string - `$E`
+is cmd's own escape character there, so it needs no ESC variable. Without that
+the prompt renders default white, which was the giveaway that a monochrome
+Claude was an environment problem and not a terminal one.
+
+All of it is in `Start-ClaudeWindow.cmd` - change it there, in one place.
 
 ## If Claude renders monochrome, it is NO_COLOR
 
@@ -169,7 +177,7 @@ monochrome. Coloured background, white text, nothing else.
 The same inheritance carries `CLAUDE_CODE_CHILD_SESSION`, which turns transcript
 saving off and shows a warning in the status line.
 
-`Start-ClaudePane.cmd` clears both, plus the other session markers, immediately
+`Start-ClaudeWindow.cmd` clears both, plus the other session markers, immediately
 before launching. These windows are meant to be independent sessions, not
 children of whatever spawned them.
 
@@ -184,7 +192,7 @@ shell itself is coloured; if it is, the terminal is not the problem.
 **`wt.exe` splits its command line on `;` even inside a single quoted argument.**
 The tail after the semicolon is re-read as a `wt` subcommand, which silently
 produces junk tabs and a garbage window title. This is why each window's startup
-lives in `Start-ClaudePane.cmd` instead of being an inline command, and why the
+lives in `Start-ClaudeWindow.cmd` instead of being an inline command, and why the
 banner colour is passed as a window *number*: ANSI colour codes are
 semicolon-separated, so passing `104;97` through `wt.exe` would split the
 command. The colour lookup happens inside the batch file.
@@ -198,10 +206,10 @@ with `--suppressApplicationTitle` on the command line as the fallback.
 
 ## The Claude profile
 
-`scripts/Install-ClaudePaneProfile.ps1` installs a Windows Terminal *fragment* at
+`scripts/Install-ClaudeProfile.ps1` installs a Windows Terminal *fragment* at
 
 ```
-%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\quad-claude\claude-pane.json
+%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\quad-claude\claude-window.json
 ```
 
 A fragment adds a profile without touching the user's `settings.json`, so

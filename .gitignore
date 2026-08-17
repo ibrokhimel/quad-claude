@@ -1,0 +1,6 @@
+# Screenshots taken while verifying layouts
+*.png
+
+# Local scratch
+scratch/
+*.log

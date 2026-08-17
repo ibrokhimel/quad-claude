@@ -1,6 +1,6 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem  Start-ClaudePane.cmd  <name> <1-4> [skip|safe|none]
+rem  Start-ClaudeWindow.cmd  <name> <1-4> [skip|safe|none]
 rem
 rem  Startup script for one Claude window: colour the terminal, name the
 rem  console, print a banner, then start Claude.

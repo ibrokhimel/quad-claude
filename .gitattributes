@@ -1,0 +1,7 @@
+# These scripts are Windows-only and are launched by cmd.exe and PowerShell,
+# so they are stored and checked out with CRLF rather than normalised to LF.
+# Without this every commit warns that line endings will be rewritten.
+* text=auto eol=crlf
+
+*.png binary
+*.jpg binary
