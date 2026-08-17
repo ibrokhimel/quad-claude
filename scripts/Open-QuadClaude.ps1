@@ -82,6 +82,7 @@ $ErrorActionPreference = 'Stop'
 $ProfileName  = 'Claude'
 $FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-pane.json'
 $PaneScript   = Join-Path $PSScriptRoot 'Start-ClaudePane.cmd'
+$StatePath    = Join-Path $env:LOCALAPPDATA 'quad-claude\session.json'
 
 function Get-SortedScreens {
     Add-Type -AssemblyName System.Windows.Forms
@@ -342,12 +343,27 @@ for ($i = 0; $i -lt 4; $i++) {
     Start-Sleep -Milliseconds 250          # let Terminal finish its own initial sizing
     $detail = [QuadClaude.Win32]::PlaceVisible($new, $r.X, $r.Y, $r.W, $r.H)
     Write-Verbose "Window $($i + 1) '$($names[$i])': $detail"
-    $placed += $new
+    $placed += [pscustomobject]@{ Name = $names[$i]; Hwnd = $new.ToInt64() }
 }
 
 # Focus window 1 last, so the grid ends up with the top-left window active.
 if ($placed.Count -gt 0) {
-    [void][QuadClaude.Win32]::SetForegroundWindow($placed[0])
+    [void][QuadClaude.Win32]::SetForegroundWindow([IntPtr]$placed[0].Hwnd)
 }
+
+# Record exactly which windows this run created. Send-ClaudeTask.ps1 reads this
+# instead of searching by title: window titles are not unique - a stale window
+# left over from an earlier run answers to the same name, and a task typed into
+# a dead terminal goes nowhere with no error.
+$stateDir = Split-Path -Parent $StatePath
+if (-not (Test-Path -LiteralPath $stateDir)) {
+    New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+}
+[pscustomobject]@{
+    created    = (Get-Date).ToString('o')
+    monitor    = $screen.DeviceName
+    workingDir = $dir
+    windows    = $placed
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $StatePath -Encoding UTF8
 
 Write-Host "Tiled $($placed.Count) window(s) on $($screen.DeviceName): $($names -join ' | ')"

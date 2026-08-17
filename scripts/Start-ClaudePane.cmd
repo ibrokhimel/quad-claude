@@ -36,17 +36,24 @@ if "%PANE%"=="" set "PANE=Claude"
 set "MODE=%~3"
 if "%MODE%"=="" set "MODE=skip"
 
-rem --- per-window theme ------------------------------------------------------
-rem BG/CUR are OSC colours (the window). SGR is the banner's colour pair.
-rem ACCENT is an SGR foreground code used for this window's prompt.
-set "BG=#101418"
+rem --- theme -----------------------------------------------------------------
+rem One neutral dark background for all four windows. Tinted backgrounds were
+rem tried and dropped: they cut the contrast of everything Claude prints on top,
+rem and identifying a window is better done with a coloured accent than by
+rem washing the whole surface.
+rem
+rem BG/FG/CUR are OSC colours (the window itself). SGR is the banner's colour
+rem pair, ACCENT an SGR foreground for the prompt - those two carry the
+rem per-window identity now.
+set "BG=#0d1117"
+set "FG=#e6edf3"
 set "CUR=#e6edf3"
 set "SGR=107;30"
 set "ACCENT=97"
-if "%~2"=="1" ( set "BG=#0d1b2a" & set "CUR=#61afef" & set "SGR=104;97" & set "ACCENT=94" )
-if "%~2"=="2" ( set "BG=#1e1030" & set "CUR=#ff79c6" & set "SGR=105;97" & set "ACCENT=95" )
-if "%~2"=="3" ( set "BG=#2a1e0a" & set "CUR=#f1fa8c" & set "SGR=103;30" & set "ACCENT=93" )
-if "%~2"=="4" ( set "BG=#0b2318" & set "CUR=#50fa7b" & set "SGR=102;30" & set "ACCENT=92" )
+if "%~2"=="1" ( set "CUR=#61afef" & set "SGR=104;97" & set "ACCENT=94" )
+if "%~2"=="2" ( set "CUR=#ff79c6" & set "SGR=105;97" & set "ACCENT=95" )
+if "%~2"=="3" ( set "CUR=#f1fa8c" & set "SGR=103;30" & set "ACCENT=93" )
+if "%~2"=="4" ( set "CUR=#50fa7b" & set "SGR=102;30" & set "ACCENT=92" )
 
 rem Colour the shell prompt, so the window is not white-on-tint once Claude
 rem exits. $E is cmd's own escape character inside a PROMPT string, so this
@@ -77,7 +84,9 @@ set "P=!P!!OSC!4;4;#61afef!ST!"
 set "P=!P!!OSC!4;5;#ff79c6!ST!"
 set "P=!P!!OSC!4;6;#8be9fd!ST!"
 set "P=!P!!OSC!4;7;#e6edf3!ST!"
-set "P=!P!!OSC!4;8;#6272a4!ST!"
+rem Slot 8 is what CLIs use for dimmed secondary text. Kept deliberately light:
+rem too dark here and half of Claude's status line becomes unreadable.
+set "P=!P!!OSC!4;8;#7d8590!ST!"
 set "P=!P!!OSC!4;9;#ff6e6e!ST!"
 set "P=!P!!OSC!4;10;#69ff94!ST!"
 set "P=!P!!OSC!4;11;#ffffa5!ST!"
@@ -85,7 +94,7 @@ set "P=!P!!OSC!4;12;#7aa2f7!ST!"
 set "P=!P!!OSC!4;13;#ff92df!ST!"
 set "P=!P!!OSC!4;14;#a4ffff!ST!"
 set "P=!P!!OSC!4;15;#ffffff!ST!"
-set "P=!P!!OSC!10;#e6edf3!ST!"
+set "P=!P!!OSC!10;!FG!!ST!"
 set "P=!P!!OSC!11;!BG!!ST!"
 set "P=!P!!OSC!12;!CUR!!ST!"
 
