@@ -4,3 +4,6 @@
 # Local scratch
 scratch/
 *.log
+
+# claude-flow drops state into whatever directory it runs from
+.claude-flow/
