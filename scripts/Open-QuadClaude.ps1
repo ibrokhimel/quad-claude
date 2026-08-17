@@ -49,6 +49,18 @@
 .PARAMETER Gap
     Pixels of space to leave between the tiled windows. Default 0 (flush).
 
+.PARAMETER Anim
+    Boot animation for every window: random (default), matrix, bios, glitch,
+    wave, figlet, or off. Omit it to use whatever -SaveDefaults last stored.
+
+.PARAMETER StaggerMs
+    Pause between launching one window and the next, applied only past two
+    windows. Defaults to 300, or whatever -SaveDefaults last stored.
+
+.PARAMETER SaveDefaults
+    Write the -Anim and -StaggerMs used by this run to config.json, so later
+    launches pick them up without being told again.
+
 .PARAMETER SkipPermissions
     Start Claude with --dangerously-skip-permissions. On by default; use
     -SkipPermissions:$false for sessions that should still prompt.
@@ -78,8 +90,12 @@ param(
     [string[]] $Titles     = @(),
     [string]   $WorkingDir = $PWD.Path,
     [int]      $Gap        = 0,
-    [ValidateSet('random', 'matrix', 'bios', 'glitch', 'wave', 'figlet', 'off')]
-    [string]   $Anim       = 'random',
+    # '' means "whatever is saved", which is how -SaveDefaults sticks. Listed in
+    # the set so binding an explicit empty string is not an error either.
+    [ValidateSet('', 'random', 'matrix', 'bios', 'glitch', 'wave', 'figlet', 'off')]
+    [string]   $Anim       = '',
+    [int]      $StaggerMs  = -1,
+    [switch]   $SaveDefaults,
     [bool]     $SkipPermissions = $true,
     [switch]   $NoClaude,
     [switch]   $DryRun
@@ -95,6 +111,44 @@ $ProfileName  = 'Claude'
 $FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-window.json'
 $WindowScript   = Join-Path $PSScriptRoot 'Start-ClaudeWindow.cmd'
 $StatePath    = Join-Path $env:LOCALAPPDATA 'quad-claude\session.json'
+$ConfigPath   = Join-Path $env:LOCALAPPDATA 'quad-claude\config.json'
+
+# Shipped defaults, used until something is saved over them.
+$DefaultAnim      = 'random'
+$DefaultStaggerMs = 300
+
+function Get-SavedDefaults {
+    <#
+        Saved preferences, so a choice can be made once instead of being
+        retyped on every launch. A missing or unreadable file is not worth
+        failing a launch over - fall back to the shipped defaults.
+    #>
+    $out = @{ anim = $DefaultAnim; staggerMs = $DefaultStaggerMs }
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $out }
+    try {
+        $c = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+        if ($c.PSObject.Properties.Name -contains 'anim' -and $c.anim) {
+            $out.anim = [string]$c.anim
+        }
+        if ($c.PSObject.Properties.Name -contains 'staggerMs' -and $c.staggerMs -ge 0) {
+            $out.staggerMs = [int]$c.staggerMs
+        }
+    } catch { }
+    return $out
+}
+
+function Save-Defaults {
+    param([string]$AnimValue, [int]$StaggerValue)
+
+    $dir = Split-Path -Parent $ConfigPath
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    [pscustomobject]@{ anim = $AnimValue; staggerMs = $StaggerValue } |
+        ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+    Write-Host "Saved defaults: anim=$AnimValue staggerMs=$StaggerValue"
+    Write-Host "  $ConfigPath"
+}
 
 function Get-SortedScreens {
     Add-Type -AssemblyName System.Windows.Forms
@@ -341,6 +395,12 @@ for ($i = 0; $i -lt $Count; $i++) {
     }
 }
 
+# An explicit switch wins for this run; otherwise fall back to what was saved.
+$saved = Get-SavedDefaults
+if (-not $Anim)       { $Anim      = $saved.anim }
+if ($StaggerMs -lt 0) { $StaggerMs = $saved.staggerMs }
+if ($SaveDefaults)    { Save-Defaults -AnimValue $Anim -StaggerValue $StaggerMs }
+
 # Install the profile fragment on first run, so window exits follow the profile
 # instead of leaving Terminal's exit notice sitting in the window.
 if (-not (Test-Path -LiteralPath $FragmentPath)) {
@@ -387,6 +447,8 @@ if ($DryRun) {
     Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } elseif ($SkipPermissions) { 'yes, --dangerously-skip-permissions' } else { 'yes, with permission prompts' })"
     Write-Host "Gap            : $Gap px"
     Write-Host "Windows        : $Count"
+    Write-Host "Animation      : $Anim"
+    Write-Host "Stagger        : $(if ($Count -gt 2) { "$StaggerMs ms between launches" } else { 'none (2 or fewer windows)' })"
     Write-Host ''
     for ($i = 0; $i -lt $Count; $i++) {
         $r = $rects[$i]
@@ -424,6 +486,13 @@ for ($i = 0; $i -lt $Count; $i++) {
     $detail = [QuadClaude.Win32]::PlaceVisible($new, $r.X, $r.Y, $r.W, $r.H)
     Write-Verbose "Window $($i + 1) '$($names[$i])': $detail"
     $placed += [pscustomobject]@{ Name = $names[$i]; Hwnd = $new.ToInt64() }
+
+    # Let each window settle before starting the next. Only past two windows,
+    # where several boot animations and shells would otherwise come up on top
+    # of each other; one or two open fast enough that a pause is just a delay.
+    if ($Count -gt 2 -and $StaggerMs -gt 0 -and $i -lt $Count - 1) {
+        Start-Sleep -Milliseconds $StaggerMs
+    }
 }
 
 # Focus window 1 last, so the grid ends up with the top-left window active.
