@@ -91,6 +91,22 @@ odd sizes still tile without a seam.
 On a 1920x1080 screen this produces four windows of exactly 960x516 at `0,0`,
 `960,0`, `0,516` and `960,516`.
 
+## If Claude renders monochrome, it is `NO_COLOR`
+
+A Claude session sets `NO_COLOR=1` in the environment of every process it spawns,
+so the output it captures stays plain text. Open these windows *from inside* a
+Claude session and that variable is inherited all the way down — Claude in the
+new window honours it and renders completely monochrome. The same inheritance
+carries `CLAUDE_CODE_CHILD_SESSION`, which turns transcript saving off.
+
+`scripts/Start-ClaudePane.cmd` clears both, plus the other session markers,
+right before launching. These windows are independent sessions, not children of
+whatever spawned them.
+
+The symptom points the wrong way — it looks like a terminal colour problem, so
+the instinct is to go fix palettes. The terminal is fine; the coloured shell
+prompt one line above proves it. Claude had simply been told not to use colour.
+
 ## The Claude Terminal profile
 
 `scripts/Install-ClaudePaneProfile.ps1` installs a Windows Terminal *fragment* —

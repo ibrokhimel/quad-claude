@@ -108,6 +108,27 @@ rem shell that cmd /k leaves behind after Claude exits. Both values on this line
 rem are expanded before endlocal runs, which is what makes the idiom work.
 endlocal & set "PROMPT=%NEWPROMPT%" & set "MODE=%MODE%"
 
+rem --- make this a clean, independent session --------------------------------
+rem If these windows were opened from inside another Claude session, they
+rem inherit that session's environment, and two of those variables are actively
+rem harmful here:
+rem
+rem   NO_COLOR                   an agent session sets this so the command
+rem                              output it captures stays plain text. Inherited
+rem                              into a real terminal it makes Claude render
+rem                              completely monochrome - no coloured status
+rem                              line, no coloured banner, white on white.
+rem   CLAUDE_CODE_CHILD_SESSION  marks the session as a child of another one,
+rem                              which turns transcript saving off.
+rem
+rem These windows are meant to be independent sessions, so clear the lot.
+set "NO_COLOR="
+set "CLAUDE_CODE_CHILD_SESSION="
+set "CLAUDECODE="
+set "CLAUDE_CODE_ENTRYPOINT="
+set "CLAUDE_CODE_SESSION_ID="
+set "CLAUDE_PID="
+
 if /i "%MODE%"=="none" goto :eof
 
 rem 'call' so control returns here, and to this cmd /k prompt, when Claude exits.

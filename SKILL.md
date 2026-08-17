@@ -103,6 +103,28 @@ on top: navy, purple, amber, green for windows 1-4. The banner colour matches.
 All four share one vivid palette. Everything is in `Start-ClaudePane.cmd` -
 change it there, in one place.
 
+## If Claude renders monochrome, it is NO_COLOR
+
+A Claude session sets `NO_COLOR=1` in the environment of every process it
+spawns, so the command output it captures stays plain text. If these windows
+are opened *from inside* a Claude session - which is exactly what happens when
+Claude runs this skill for the user - that variable is inherited all the way
+down, and Claude in the new window honours it and renders completely
+monochrome. Coloured background, white text, nothing else.
+
+The same inheritance carries `CLAUDE_CODE_CHILD_SESSION`, which turns transcript
+saving off and shows a warning in the status line.
+
+`Start-ClaudePane.cmd` clears both, plus the other session markers, immediately
+before launching. These windows are meant to be independent sessions, not
+children of whatever spawned them.
+
+Worth knowing because the symptom points the wrong way: it looks like a terminal
+colour problem, so the instinct is to go fix palettes and colour schemes. The
+terminal is fine - the shell prompt right above it is colourful. Claude was told
+not to use colour. To confirm which it is, check whether SGR output from the
+shell itself is coloured; if it is, the terminal is not the problem.
+
 ## Two traps worth remembering
 
 **`wt.exe` splits its command line on `;` even inside a single quoted argument.**
