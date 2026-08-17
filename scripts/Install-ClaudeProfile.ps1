@@ -46,8 +46,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $FragmentDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude'
-$FragmentPath = Join-Path $FragmentDir 'claude-pane.json'
+$FragmentPath = Join-Path $FragmentDir 'claude-window.json'
+$LegacyPath   = Join-Path $FragmentDir 'claude-pane.json'
 $ProfileName  = 'Claude'
+
+# Earlier versions wrote the same profile to claude-pane.json. Left behind it
+# would be loaded alongside the new file, giving Terminal two profiles with the
+# same name, so clear it out whichever way this script is being run.
+if (Test-Path -LiteralPath $LegacyPath) {
+    Remove-Item -LiteralPath $LegacyPath -Force
+    Write-Host "Removed superseded fragment $LegacyPath"
+}
 
 if ($Uninstall) {
     if (Test-Path -LiteralPath $FragmentPath) {

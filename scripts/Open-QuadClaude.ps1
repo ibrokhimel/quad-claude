@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Opens four separate, named Windows Terminal windows running Claude Code,
-    tiled flush into the four quadrants of the monitor you choose.
+    Opens separate, named Windows Terminal windows running Claude Code, tiled
+    flush across the monitor you choose.
 
 .DESCRIPTION
-    Four independent Terminal windows, one per quadrant:
+    Independent Terminal windows, tiled to fill the screen. Four by default:
 
         +-----------+-----------+
         |     1     |     2     |
@@ -16,16 +16,17 @@
     and closable on its own - and each runs cmd.
 
     Alignment is done in two steps. Each window is launched with --pos near its
-    quadrant, then moved with SetWindowPos to exact pixel bounds. The second
-    step compensates for the invisible resize border Windows puts around every
+    slot, then moved with SetWindowPos to exact pixel bounds. The second step
+    compensates for the invisible resize border Windows puts around every
     window: GetWindowRect includes it, so tiling by those numbers leaves a
-    visible gap of roughly 7px between neighbours. The real visible edge comes
+    visible gap of roughly 14px between neighbours. The real visible edge comes
     from DWMWA_EXTENDED_FRAME_BOUNDS, and the difference between the two is
-    added back, which is what makes the four windows sit truly flush.
+    added back, which is what makes the windows sit truly flush.
 
-    Quadrants are computed from the monitor's working area, so windows never
-    hide behind the taskbar, and the halves are derived by subtraction rather
-    than doubling so odd widths and heights still tile exactly.
+    Slots are computed from the monitor's working area, so windows never hide
+    behind the taskbar, and every boundary is derived from the span's own
+    arithmetic rather than by accumulating sizes, so odd widths and heights
+    still tile exactly with no seam.
 
 .PARAMETER Monitor
     Which display to use. Accepts:
@@ -35,11 +36,15 @@
       - 'portrait'            - first screen taller than it is wide
       - a device-name substring, e.g. 'DISPLAY6'
 
+.PARAMETER Count
+    How many windows, 1 to 16. Defaults to the number of -Titles given, or 4.
+    Layouts for 1-6 are hand-picked; above that it is a balanced grid.
+
 .PARAMETER Titles
-    One to four window names. Missing names are filled with 'Claude <n>'.
+    Window names. Missing names are filled with 'Claude <n>'.
 
 .PARAMETER WorkingDir
-    Starting directory for all four windows. Defaults to the current directory.
+    Starting directory for every window. Defaults to the current directory.
 
 .PARAMETER Gap
     Pixels of space to leave between the tiled windows. Default 0 (flush).
@@ -49,7 +54,7 @@
     -SkipPermissions:$false for sessions that should still prompt.
 
 .PARAMETER NoClaude
-    Tile four plain cmd windows instead of starting Claude. For testing layout.
+    Tile plain cmd windows instead of starting Claude. For testing layout.
 
 .PARAMETER DryRun
     Print the resolved plan and each wt.exe argument list, launch nothing.
@@ -61,6 +66,10 @@
 .EXAMPLE
     .\Open-QuadClaude.ps1 -Monitor 2 -Titles backend,frontend,tests,notes
     Named windows tiled on the second monitor from the left.
+
+.EXAMPLE
+    .\Open-QuadClaude.ps1 -Count 3 -Monitor portrait
+    Three windows on the portrait screen: one tall, two stacked beside it.
 #>
 [CmdletBinding()]
 param(
@@ -77,12 +86,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Banner colours live in Start-ClaudePane.cmd, keyed by window number. They
+# Banner colours live in Start-ClaudeWindow.cmd, keyed by window number. They
 # cannot be passed through here: ANSI colour codes are semicolon-separated and
 # wt.exe splits its command line on ';' even inside a quoted argument.
 $ProfileName  = 'Claude'
-$FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-pane.json'
-$PaneScript   = Join-Path $PSScriptRoot 'Start-ClaudePane.cmd'
+$FragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\quad-claude\claude-window.json'
+$WindowScript   = Join-Path $PSScriptRoot 'Start-ClaudeWindow.cmd'
 $StatePath    = Join-Path $env:LOCALAPPDATA 'quad-claude\session.json'
 
 function Get-SortedScreens {
@@ -302,8 +311,8 @@ function Get-SpaceSafePath {
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     throw "Windows Terminal (wt.exe) was not found on PATH. Install it from the Microsoft Store."
 }
-if (-not (Test-Path -LiteralPath $PaneScript)) {
-    throw "Missing $PaneScript - it ships alongside this script."
+if (-not (Test-Path -LiteralPath $WindowScript)) {
+    throw "Missing $WindowScript - it ships alongside this script."
 }
 
 $screen = Resolve-TargetScreen -Spec $Monitor
@@ -333,13 +342,13 @@ for ($i = 0; $i -lt $Count; $i++) {
 # Install the profile fragment on first run, so window exits follow the profile
 # instead of leaving Terminal's exit notice sitting in the window.
 if (-not (Test-Path -LiteralPath $FragmentPath)) {
-    $installer = Join-Path $PSScriptRoot 'Install-ClaudePaneProfile.ps1'
+    $installer = Join-Path $PSScriptRoot 'Install-ClaudeProfile.ps1'
     if (Test-Path -LiteralPath $installer) { & $installer | Out-Null }
 }
 $useProfile = Test-ClaudeProfileLive
 
 $rects   = @(Get-TileRects -WorkingArea $screen.WorkingArea -Count $Count -Gap $Gap)
-$paneCmd = Get-SpaceSafePath -Path $PaneScript
+$paneCmd = Get-SpaceSafePath -Path $WindowScript
 
 function New-WtArgs {
     param([int]$Index)
