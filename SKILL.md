@@ -179,9 +179,29 @@ Every window plays a short animation before Claude starts. `-Anim` picks one:
 | `figlet` | big block letters via pyfiglet, in a rich panel with a spinner |
 | `off` | no animation |
 
-Four are pure PowerShell (`Show-BootAnimation.ps1`). cmd cannot do this itself -
-no sub-second sleep, no cursor control - so the batch shells out to PowerShell,
-which gets ANSI cursor addressing and 24-bit colour with no dependencies.
+**One style per launch, shared by every window.** `random` is rolled once in
+`Open-QuadClaude.ps1`, not inside each window: the windows open as a set and
+should read as one machine booting. Letting each roll its own looked like four
+unrelated things starting. The saved value stays `random`, so it re-rolls per
+launch rather than per window.
+
+`-AnimMs` sets the length, default 3000. `-StaggerMs` (default 300, only past
+two windows) spaces the launches so the animations cascade rather than collide.
+
+**Every animation adapts to resize.** Window size is re-read each frame and the
+layout rebuilt when it changes, so dragging the window mid-animation reflows
+the rain, waves and panels instead of tearing them.
+
+**The sequence is intro, then outro, then Claude** - all before the session.
+The outro is the hand-off: the name, `launching claude`, and two accent shutters
+closing across it, so the session does not appear on top of a half-finished
+flourish. One outro rather than one per style, because whichever intro just
+played, this is the same beat: stop, hand over.
+
+Four styles are pure PowerShell (`Show-BootAnimation.ps1`). cmd cannot do this
+itself - no sub-second sleep, no cursor control - so the batch shells out to
+PowerShell, which gets ANSI cursor addressing and 24-bit colour with no
+dependencies.
 
 `figlet` is the exception: it runs `splash.py` (pyfiglet + rich), because real
 block-letter type needs a font database and pyfiglet ships 571. If Python or

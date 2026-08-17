@@ -94,6 +94,7 @@ param(
     # the set so binding an explicit empty string is not an error either.
     [ValidateSet('', 'random', 'matrix', 'bios', 'glitch', 'wave', 'figlet', 'off')]
     [string]   $Anim       = '',
+    [int]      $AnimMs     = -1,
     [int]      $StaggerMs  = -1,
     [switch]   $SaveDefaults,
     [bool]     $SkipPermissions = $true,
@@ -115,6 +116,7 @@ $ConfigPath   = Join-Path $env:LOCALAPPDATA 'quad-claude\config.json'
 
 # Shipped defaults, used until something is saved over them.
 $DefaultAnim      = 'random'
+$DefaultAnimMs    = 3000
 $DefaultStaggerMs = 300
 
 function Get-SavedDefaults {
@@ -123,12 +125,15 @@ function Get-SavedDefaults {
         retyped on every launch. A missing or unreadable file is not worth
         failing a launch over - fall back to the shipped defaults.
     #>
-    $out = @{ anim = $DefaultAnim; staggerMs = $DefaultStaggerMs }
+    $out = @{ anim = $DefaultAnim; animMs = $DefaultAnimMs; staggerMs = $DefaultStaggerMs }
     if (-not (Test-Path -LiteralPath $ConfigPath)) { return $out }
     try {
         $c = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
         if ($c.PSObject.Properties.Name -contains 'anim' -and $c.anim) {
             $out.anim = [string]$c.anim
+        }
+        if ($c.PSObject.Properties.Name -contains 'animMs' -and $c.animMs -gt 0) {
+            $out.animMs = [int]$c.animMs
         }
         if ($c.PSObject.Properties.Name -contains 'staggerMs' -and $c.staggerMs -ge 0) {
             $out.staggerMs = [int]$c.staggerMs
@@ -138,15 +143,15 @@ function Get-SavedDefaults {
 }
 
 function Save-Defaults {
-    param([string]$AnimValue, [int]$StaggerValue)
+    param([string]$AnimValue, [int]$AnimMsValue, [int]$StaggerValue)
 
     $dir = Split-Path -Parent $ConfigPath
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    [pscustomobject]@{ anim = $AnimValue; staggerMs = $StaggerValue } |
+    [pscustomobject]@{ anim = $AnimValue; animMs = $AnimMsValue; staggerMs = $StaggerValue } |
         ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
-    Write-Host "Saved defaults: anim=$AnimValue staggerMs=$StaggerValue"
+    Write-Host "Saved defaults: anim=$AnimValue animMs=$AnimMsValue staggerMs=$StaggerValue"
     Write-Host "  $ConfigPath"
 }
 
@@ -398,8 +403,18 @@ for ($i = 0; $i -lt $Count; $i++) {
 # An explicit switch wins for this run; otherwise fall back to what was saved.
 $saved = Get-SavedDefaults
 if (-not $Anim)       { $Anim      = $saved.anim }
+if ($AnimMs -le 0)    { $AnimMs    = $saved.animMs }
 if ($StaggerMs -lt 0) { $StaggerMs = $saved.staggerMs }
-if ($SaveDefaults)    { Save-Defaults -AnimValue $Anim -StaggerValue $StaggerMs }
+if ($SaveDefaults)    { Save-Defaults -AnimValue $Anim -AnimMsValue $AnimMs -StaggerValue $StaggerMs }
+
+# Resolve 'random' ONCE, here, rather than letting each window roll its own.
+# The windows open as a set and should read as one machine booting, so they run
+# the same animation in step; per-window rolls looked like four unrelated things.
+# 'random' stays the saved value - it re-rolls per launch, not per window.
+$ResolvedAnim = $Anim
+if ($ResolvedAnim -eq 'random') {
+    $ResolvedAnim = @('matrix', 'bios', 'glitch', 'wave', 'figlet')[(Get-Random -Minimum 0 -Maximum 5)]
+}
 
 # Install the profile fragment on first run, so window exits follow the profile
 # instead of leaving Terminal's exit notice sitting in the window.
@@ -437,7 +452,8 @@ function New-WtArgs {
     if ($NoClaude)             { $a.Add('none') }
     elseif ($SkipPermissions)  { $a.Add('skip') }
     else                       { $a.Add('safe') }
-    $a.Add($Anim)
+    $a.Add($ResolvedAnim)
+    $a.Add($AnimMs.ToString())
     return $a
 }
 
@@ -447,7 +463,7 @@ if ($DryRun) {
     Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } elseif ($SkipPermissions) { 'yes, --dangerously-skip-permissions' } else { 'yes, with permission prompts' })"
     Write-Host "Gap            : $Gap px"
     Write-Host "Windows        : $Count"
-    Write-Host "Animation      : $Anim"
+    Write-Host "Animation      : $ResolvedAnim$(if ($Anim -eq 'random') { ' (rolled from random, same for every window)' })  ${AnimMs}ms"
     Write-Host "Stagger        : $(if ($Count -gt 2) { "$StaggerMs ms between launches" } else { 'none (2 or fewer windows)' })"
     Write-Host ''
     for ($i = 0; $i -lt $Count; $i++) {

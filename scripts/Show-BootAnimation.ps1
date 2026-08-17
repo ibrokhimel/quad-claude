@@ -1,15 +1,18 @@
 <#
 .SYNOPSIS
-    Plays a short boot animation in the current terminal, then clears it.
+    Plays a boot or shutdown animation in the current terminal, then clears it.
 
 .DESCRIPTION
-    Run by Start-ClaudeWindow.cmd just before Claude starts, so each window
-    boots with something to watch instead of a bare prompt.
+    Run by Start-ClaudeWindow.cmd around the Claude session: intro before it
+    starts, outro after it exits.
 
     PowerShell rather than cmd because cmd has no sub-second sleep and no
-    cursor control, which rules out animation entirely. Here frames are
-    composed into a single string and written in one call - writing per
-    character is what makes terminal animation flicker.
+    cursor control, which rules out animation entirely. Frames are composed
+    into a single string and written in one call - writing per character is
+    what makes terminal animation flicker.
+
+    Every animation re-reads the window size each frame and re-lays itself out
+    when it changes, so resizing mid-play reflows instead of tearing.
 
     Everything is ANSI: cursor addressing, 24-bit colour, hide/show cursor.
     Windows Terminal supports all of it, and nothing here needs a font,
@@ -22,11 +25,15 @@
     Window number, picks the accent colour. Cycles every four.
 
 .PARAMETER Style
-    matrix | bios | glitch | wave, or random (default) to pick one per launch.
+    matrix | bios | glitch | wave | figlet, or random to pick one.
+
+.PARAMETER Phase
+    intro (default) for the chosen style, or outro for the hand-off that closes
+    it out. Both run before Claude: intro, then outro, then the session.
 
 .PARAMETER DurationMs
-    Rough target length. Kept short on purpose - this plays before Claude
-    starts, so every millisecond here is one the user waits.
+    Rough target length for the intro. Every millisecond here is one the user
+    waits before Claude appears; the outro runs at roughly a third of it.
 #>
 [CmdletBinding()]
 param(
@@ -34,7 +41,9 @@ param(
     [int]    $Index = 1,
     [ValidateSet('random', 'matrix', 'bios', 'glitch', 'wave', 'figlet')]
     [string] $Style = 'random',
-    [int]    $DurationMs = 1700
+    [ValidateSet('intro', 'outro')]
+    [string] $Phase = 'intro',
+    [int]    $DurationMs = 3000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,9 +53,8 @@ $Rand = New-Object System.Random
 
 # Without this every non-ASCII glyph reaches the terminal as '?'. The console
 # encodes output in its code page, which on a default Windows box is 1252 and
-# has no katakana and no block-drawing characters - so the rain and the bars
-# come out as question marks. Note it is the ENCODING, not the font: a missing
-# glyph renders as a box, a mis-encoded one renders as '?'.
+# has no katakana and no block-drawing characters. Note it is the ENCODING, not
+# the font: a missing glyph renders as a box, a mis-encoded one renders as '?'.
 $PrevEncoding = [Console]::OutputEncoding
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
@@ -60,8 +68,8 @@ function At { param([int]$row, [int]$col) return "$E[$row;$($col)H" }
 $Reset = "$E[0m"
 $Bold  = "$E[1m"
 
-# Accent per window, cycling every four - same four identities the banner and
-# prompt use, so the animation belongs to the window rather than floating free.
+# Accent per window, cycling every four - the same four identities the banner
+# and prompt use, so the animation belongs to the window rather than floating free.
 $Accents = @(
     @(97, 175, 239),    # blue
     @(255, 121, 198),   # pink
@@ -71,23 +79,50 @@ $Accents = @(
 $Acc = $Accents[(($Index - 1) % 4 + 4) % 4]
 $AccFg = Fg $Acc[0] $Acc[1] $Acc[2]
 
-# A terminal that cannot report its size cannot be drawn on reliably.
-try {
-    $size = $Host.UI.RawUI.WindowSize
-    $W = [Math]::Max(24, [int]$size.Width)
-    $H = [Math]::Max(9,  [int]$size.Height)
-} catch {
-    return
+function Show-Frame { param([string]$s) $Out.Write($s); $Out.Flush() }
+
+# --- geometry ----------------------------------------------------------------
+# Size lives at script scope because every animation re-reads it per frame and
+# re-lays itself out when the user drags the window.
+$script:W = 80
+$script:H = 24
+
+function Read-Size {
+    try {
+        $s = $Host.UI.RawUI.WindowSize
+        return @{ W = [Math]::Max(24, [int]$s.Width); H = [Math]::Max(9, [int]$s.Height) }
+    } catch {
+        return @{ W = $script:W; H = $script:H }
+    }
 }
 
-$Label = $Name.ToUpper()
-# Letter-spaced, which is as close to "big" as a terminal gets without
-# shipping a block font that would overflow on a long name anyway.
-$Spaced = ($Label.ToCharArray() -join ' ')
-if ($Spaced.Length -gt $W - 4) { $Spaced = $Label }
-if ($Spaced.Length -gt $W - 4) { $Spaced = $Label.Substring(0, [Math]::Min($Label.Length, $W - 4)) }
+function Test-Resized {
+    <# True when the window changed size since the last check, updating W/H. #>
+    $s = Read-Size
+    if ($s.W -ne $script:W -or $s.H -ne $script:H) {
+        $script:W = $s.W
+        $script:H = $s.H
+        return $true
+    }
+    return $false
+}
 
-function Show-Frame { param([string]$s) $Out.Write($s); $Out.Flush() }
+$init = Read-Size
+$script:W = $init.W
+$script:H = $init.H
+if ($script:W -lt 24 -or $script:H -lt 9) { return }
+
+$Label = $Name.ToUpper()
+
+function Get-Spaced {
+    <# Letter-spaced, which is as close to "big" as a terminal gets without
+       shipping a block font that would overflow a long name anyway. Recomputed
+       on resize because a narrow window has to drop back to the plain name. #>
+    $s = ($Label.ToCharArray() -join ' ')
+    if ($s.Length -gt $script:W - 4) { $s = $Label }
+    if ($s.Length -gt $script:W - 4) { $s = $Label.Substring(0, [Math]::Max(1, $script:W - 4)) }
+    return $s
+}
 
 # --- matrix ------------------------------------------------------------------
 function Play-Matrix {
@@ -101,100 +136,110 @@ function Play-Matrix {
 
     $head = Fg 220 255 220
     $body = Fg 0 200 90
-    $dim  = Fg 0 110 50
 
-    $y     = New-Object int[] $W
-    $rate  = New-Object int[] $W
-    $trail = New-Object int[] $W
-    $prev  = New-Object 'char[]' $W
-    for ($c = 0; $c -lt $W; $c++) {
-        $y[$c]     = -$Rand.Next(0, $H)
-        $rate[$c]  = $Rand.Next(1, 4)
-        $trail[$c] = $Rand.Next(5, 16)
-        $prev[$c]  = ' '
+    $y = $null; $rate = $null; $trail = $null; $prev = $null
+    function Reset-Drops {
+        $script:y     = New-Object int[] $script:W
+        $script:rate  = New-Object int[] $script:W
+        $script:trail = New-Object int[] $script:W
+        $script:prev  = New-Object 'char[]' $script:W
+        for ($c = 0; $c -lt $script:W; $c++) {
+            $script:y[$c]     = -$Rand.Next(0, $script:H)
+            $script:rate[$c]  = $Rand.Next(1, 4)
+            $script:trail[$c] = $Rand.Next(5, 16)
+            $script:prev[$c]  = ' '
+        }
     }
+    Reset-Drops
 
-    $frames  = [int]($DurationMs / 35)
+    $step    = 50
+    $frames  = [int]($DurationMs / $step)
     $resolve = [int]($frames * 0.55)
-    $mid     = [int]($H / 2)
-    $startCol = [int](($W - $Spaced.Length) / 2) + 1
 
     Show-Frame "$E[2J"
     for ($f = 0; $f -lt $frames; $f++) {
+        if (Test-Resized) { Reset-Drops; Show-Frame "$E[2J" }
+
+        $mid = [int]($script:H / 2)
+        $spaced = Get-Spaced
+        $startCol = [int](($script:W - $spaced.Length) / 2) + 1
+
         $sb = New-Object System.Text.StringBuilder
-        for ($c = 0; $c -lt $W; $c++) {
-            if ($f % $rate[$c] -ne 0) { continue }
+        for ($c = 0; $c -lt $script:W; $c++) {
+            if ($f % $script:rate[$c] -ne 0) { continue }
 
             # Re-colour the previous head to trail green, then draw the new one
             # white. Only these two cells change, so the rest of the trail keeps
             # the colour it was drawn with - full redraws are what kill framerate.
-            $py = $y[$c]
-            if ($py -ge 1 -and $py -le $H -and $prev[$c] -ne ' ') {
-                [void]$sb.Append((At $py ($c + 1))).Append($body).Append($prev[$c])
+            $py = $script:y[$c]
+            if ($py -ge 1 -and $py -le $script:H -and $script:prev[$c] -ne ' ') {
+                [void]$sb.Append((At $py ($c + 1))).Append($body).Append($script:prev[$c])
             }
 
-            $y[$c]++
-            $ny = $y[$c]
+            $script:y[$c]++
+            $ny = $script:y[$c]
             $ch = $glyphs[$Rand.Next(0, $gn)]
-            if ($ny -ge 1 -and $ny -le $H) {
+            if ($ny -ge 1 -and $ny -le $script:H) {
                 [void]$sb.Append((At $ny ($c + 1))).Append($head).Append($ch)
             }
-            $prev[$c] = $ch
+            $script:prev[$c] = $ch
 
-            $ty = $ny - $trail[$c]
-            if ($ty -ge 1 -and $ty -le $H) {
+            $ty = $ny - $script:trail[$c]
+            if ($ty -ge 1 -and $ty -le $script:H) {
                 [void]$sb.Append((At $ty ($c + 1))).Append(' ')
             }
-            if ($ny -gt $H + $trail[$c]) {
-                $y[$c]     = -$Rand.Next(0, 8)
-                $rate[$c]  = $Rand.Next(1, 4)
-                $trail[$c] = $Rand.Next(5, 16)
-                $prev[$c]  = ' '
+            if ($ny -gt $script:H + $script:trail[$c]) {
+                $script:y[$c]     = -$Rand.Next(0, 8)
+                $script:rate[$c]  = $Rand.Next(1, 4)
+                $script:trail[$c] = $Rand.Next(5, 16)
+                $script:prev[$c]  = ' '
             }
         }
 
         if ($f -ge $resolve) {
             # Hold a clear band so the rain never runs through the name.
             $p = [Math]::Min(1.0, ($f - $resolve) / [double][Math]::Max(1, ($frames - $resolve - 3)))
-            $show = [int][Math]::Ceiling($Spaced.Length * $p)
-            [void]$sb.Append((At ($mid - 1) 1)).Append((' ' * $W))
-            [void]$sb.Append((At ($mid + 1) 1)).Append((' ' * $W))
-            [void]$sb.Append((At $mid 1)).Append((' ' * $W))
+            $show = [int][Math]::Ceiling($spaced.Length * $p)
+            [void]$sb.Append((At ($mid - 1) 1)).Append((' ' * $script:W))
+            [void]$sb.Append((At ($mid + 1) 1)).Append((' ' * $script:W))
+            [void]$sb.Append((At $mid 1)).Append((' ' * $script:W))
             [void]$sb.Append((At $mid $startCol)).Append($Bold).Append($AccFg)
-            [void]$sb.Append($Spaced.Substring(0, [Math]::Min($show, $Spaced.Length)))
+            [void]$sb.Append($spaced.Substring(0, [Math]::Min($show, $spaced.Length)))
         }
 
         [void]$sb.Append($Reset)
         Show-Frame $sb.ToString()
-        Start-Sleep -Milliseconds 35
+        Start-Sleep -Milliseconds $step
     }
 }
 
 # --- bios --------------------------------------------------------------------
 function Play-Bios {
-    $ok   = Fg 80 250 123
-    $grey = Fg 125 133 144
+    $ok    = Fg 80 250 123
+    $grey  = Fg 125 133 144
     $white = Fg 230 237 243
+    $dot   = [char]0x00B7
 
     $checks = @(
         @('terminal',    'vt / truecolor'),
         @('palette',     '16 / 16'),
         @('workspace',   'mounted'),
-        @('permissions', 'bypassed')
+        @('permissions', 'bypassed'),
+        @('session',     'independent')
     )
 
-    $dot = [char]0x00B7
     Show-Frame "$E[2J$(At 2 3)$Bold$AccFg CLAUDE BOOT SEQUENCE $Reset$grey  $dot  node $Reset$white$Label$Reset"
-    $rule = [string][char]0x2500 * [Math]::Min($W - 5, 46)
+    $rule = [string][char]0x2500 * [Math]::Min($script:W - 5, 46)
     Show-Frame "$(At 3 3)$grey$rule$Reset"
-    Start-Sleep -Milliseconds 90
+    Start-Sleep -Milliseconds 140
 
     $row = 5
     foreach ($c in $checks) {
+        [void](Test-Resized)
         $dots = '.' * [Math]::Max(2, 18 - $c[0].Length)
         Show-Frame "$(At $row 3)$grey[ $Reset$ok`OK$grey ]$Reset  $white$($c[0]) $grey$dots $Reset$($c[1])"
         $row++
-        Start-Sleep -Milliseconds 110
+        Start-Sleep -Milliseconds 170
     }
 
     Show-Frame "$(At $row 3)$grey[ $Reset$AccFg..$grey ]$Reset  $white`claude $grey........... $Reset`starting"
@@ -202,7 +247,7 @@ function Play-Bios {
 
     # Gradient bar: red at empty, amber mid, green at full, so the colour itself
     # reports progress rather than just the length of the fill.
-    $barW = [Math]::Min($W - 12, 40)
+    $barW = [Math]::Min($script:W - 12, 40)
     for ($i = 0; $i -le $barW; $i++) {
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.Append((At $row 3))
@@ -222,48 +267,67 @@ function Play-Bios {
         $pct = [int](100 * $i / $barW)
         [void]$sb.Append($Reset).Append('  ').Append($white).Append("$pct%  ").Append($Reset)
         Show-Frame $sb.ToString()
-        Start-Sleep -Milliseconds ([Math]::Max(8, [int]($DurationMs * 0.45 / $barW)))
+        Start-Sleep -Milliseconds ([Math]::Max(12, [int]($DurationMs * 0.45 / $barW)))
     }
 
     Show-Frame "$(At ($row + 2) 3)$Bold$ok`CLAUDE ONLINE$Reset"
-    Start-Sleep -Milliseconds 260
+    Start-Sleep -Milliseconds 400
 }
 
 # --- glitch ------------------------------------------------------------------
-function Play-Glitch {
+function Get-Noise {
     # Built from code points rather than written literally: PowerShell 5.1 reads
     # a .ps1 as ANSI unless it carries a BOM, so non-ASCII literals in the source
     # are one careless re-save away from turning into mojibake.
-    $noise = @()
+    $n = @()
     foreach ($code in 0x2593, 0x2592, 0x2591, 0x2588, 0x259A, 0x259E, 0x259B, 0x259C, 0x2584, 0x2580, 0x2590, 0x258C) {
-        $noise += [char]$code
+        $n += [char]$code
     }
     foreach ($ch in '#', '%', '&', '@', '$', '?', '!', '/', '\', '|', '<', '>', '=', '+', '*') {
-        $noise += [char]$ch
+        $n += [char]$ch
     }
+    return $n
+}
+
+function Play-Glitch {
+    $noise = Get-Noise
     $nn = $noise.Count
-    $mid = [int]($H / 2)
-    $startCol = [int](($W - $Spaced.Length) / 2) + 1
-    $chars = $Spaced.ToCharArray()
     $white = Fg 230 237 243
 
-    Show-Frame "$E[2J"
+    $spaced = Get-Spaced
+    $chars = $spaced.ToCharArray()
 
-    # Frame the panel first so the noise has somewhere to live.
-    $bw = [Math]::Min($W - 4, $Spaced.Length + 8)
-    $bx = [int](($W - $bw) / 2) + 1
-    Show-Frame "$(At ($mid - 2) $bx)$AccFg$([char]0x250C)$([string][char]0x2500 * ($bw - 2))$([char]0x2510)$Reset"
-    Show-Frame "$(At ($mid + 2) $bx)$AccFg$([char]0x2514)$([string][char]0x2500 * ($bw - 2))$([char]0x2518)$Reset"
+    function Draw-Frame-Box {
+        $mid = [int]($script:H / 2)
+        $bw = [Math]::Min($script:W - 4, $spaced.Length + 8)
+        $bx = [int](($script:W - $bw) / 2) + 1
+        Show-Frame "$E[2J"
+        Show-Frame "$(At ($mid - 2) $bx)$AccFg$([char]0x250C)$([string][char]0x2500 * ($bw - 2))$([char]0x2510)$Reset"
+        Show-Frame "$(At ($mid + 2) $bx)$AccFg$([char]0x2514)$([string][char]0x2500 * ($bw - 2))$([char]0x2518)$Reset"
+    }
+    Draw-Frame-Box
 
     # Scramble, then lock characters in a random order so it reads as decrypting
     # rather than simply typing out left to right.
     $order = 0..($chars.Count - 1) | Sort-Object { $Rand.Next() }
     $locked = New-Object bool[] $chars.Count
-    $steps = $chars.Count + 6
-    $per = [Math]::Max(18, [int]($DurationMs * 0.6 / [Math]::Max(1, $steps)))
+    $steps = $chars.Count + 10
+    $per = [Math]::Max(30, [int]($DurationMs * 0.6 / [Math]::Max(1, $steps)))
 
     for ($s = 0; $s -lt $steps; $s++) {
-        if ($s -lt $order.Count) { $locked[$order[$s]] = $true }
+        if (Test-Resized) {
+            $spaced = Get-Spaced
+            $chars = $spaced.ToCharArray()
+            if ($locked.Count -ne $chars.Count) {
+                $locked = New-Object bool[] $chars.Count
+                for ($k = 0; $k -lt [Math]::Min($s, $chars.Count); $k++) { $locked[$k] = $true }
+            }
+            Draw-Frame-Box
+        }
+        if ($s -lt $order.Count -and $order[$s] -lt $locked.Count) { $locked[$order[$s]] = $true }
+
+        $mid = [int]($script:H / 2)
+        $startCol = [int](($script:W - $spaced.Length) / 2) + 1
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.Append((At $mid $startCol))
         for ($i = 0; $i -lt $chars.Count; $i++) {
@@ -281,39 +345,46 @@ function Play-Glitch {
 
     # Chromatic split: the same text offset a column each way in red and cyan,
     # for two frames. Cheap, and it sells the whole effect.
-    foreach ($pass in 1, 2) {
-        Show-Frame "$(At $mid ([Math]::Max(1, $startCol - 1)))$(Fg 255 60 60)$Spaced$Reset"
-        Show-Frame "$(At $mid ([Math]::Min($W, $startCol + 1)))$(Fg 60 230 255)$Spaced$Reset"
-        Start-Sleep -Milliseconds 45
-        Show-Frame "$(At $mid 1)$(' ' * $W)$(At $mid $startCol)$Bold$white$Spaced$Reset"
-        Start-Sleep -Milliseconds 55
+    $mid = [int]($script:H / 2)
+    $startCol = [int](($script:W - $spaced.Length) / 2) + 1
+    foreach ($pass in 1, 2, 3) {
+        Show-Frame "$(At $mid ([Math]::Max(1, $startCol - 1)))$(Fg 255 60 60)$spaced$Reset"
+        Show-Frame "$(At $mid ([Math]::Min($script:W, $startCol + 1)))$(Fg 60 230 255)$spaced$Reset"
+        Start-Sleep -Milliseconds 70
+        Show-Frame "$(At $mid 1)$(' ' * $script:W)$(At $mid $startCol)$Bold$white$spaced$Reset"
+        Start-Sleep -Milliseconds 90
     }
-    Start-Sleep -Milliseconds 180
+    Start-Sleep -Milliseconds 260
 }
 
 # --- wave --------------------------------------------------------------------
 function Play-Wave {
     $blocks = [char[]]@(0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588)
-    $mid = [int]($H / 2)
-    $top = [Math]::Max(1, $mid - 2)
-    $bot = [Math]::Min($H, $mid + 2)
-    $startCol = [int](($W - $Spaced.Length) / 2) + 1
-    $frames = [int]($DurationMs / 40)
+    $step = 55
+    $frames = [int]($DurationMs / $step)
 
     Show-Frame "$E[2J"
     for ($f = 0; $f -lt $frames; $f++) {
-        $phase = $f * 0.42
+        if (Test-Resized) { Show-Frame "$E[2J" }
+
+        $mid = [int]($script:H / 2)
+        $top = [Math]::Max(1, $mid - 2)
+        $bot = [Math]::Min($script:H, $mid + 2)
+        $spaced = Get-Spaced
+        $startCol = [int](($script:W - $spaced.Length) / 2) + 1
+
+        $phase = $f * 0.34
         $sb = New-Object System.Text.StringBuilder
 
         foreach ($row in @($top, $bot)) {
             $dir = 1
             if ($row -eq $bot) { $dir = -1 }
             [void]$sb.Append((At $row 1))
-            for ($x = 0; $x -lt $W; $x++) {
+            for ($x = 0; $x -lt $script:W; $x++) {
                 $v = [Math]::Sin(($x * 0.22) + ($phase * $dir))
                 $lvl = [int](($v + 1) / 2 * 7)
                 # Hue sweeps along x so the crest reads as travelling, not pulsing.
-                $t = ($x / [double]$W + $f / 40.0) % 1.0
+                $t = ($x / [double]$script:W + $f / 45.0) % 1.0
                 $r = [int](127 + 127 * [Math]::Sin(6.283 * $t))
                 $g = [int](127 + 127 * [Math]::Sin(6.283 * ($t + 0.33)))
                 $b = [int](127 + 127 * [Math]::Sin(6.283 * ($t + 0.66)))
@@ -324,13 +395,13 @@ function Play-Wave {
         # Name fades up out of the middle as the waves run.
         $p = [Math]::Min(1.0, $f / [double][Math]::Max(1, $frames * 0.6))
         $lv = [int](60 + 195 * $p)
-        [void]$sb.Append((At $mid 1)).Append((' ' * $W))
+        [void]$sb.Append((At $mid 1)).Append((' ' * $script:W))
         [void]$sb.Append((At $mid $startCol)).Append($Bold).Append((Fg $lv $lv $lv))
-        [void]$sb.Append([char]0x25C6).Append('  ').Append($Spaced).Append('  ').Append([char]0x25C6)
+        [void]$sb.Append([char]0x25C6).Append('  ').Append($spaced).Append('  ').Append([char]0x25C6)
         [void]$sb.Append($Reset)
 
         Show-Frame $sb.ToString()
-        Start-Sleep -Milliseconds 40
+        Start-Sleep -Milliseconds $step
     }
 }
 
@@ -360,6 +431,66 @@ function Play-Figlet {
     return ($LASTEXITCODE -eq 0)
 }
 
+# --- outro -------------------------------------------------------------------
+function Play-Outro {
+    <#
+        Hand-off sequence, style-agnostic: the name settles, two shutters close
+        across it from the edges, then the line collapses to nothing and Claude
+        takes the screen.
+
+        It runs between the intro and Claude, not after the session. The point
+        is to close the intro out deliberately, so the session does not appear
+        on top of a half-finished flourish.
+
+        One outro rather than one per style, because whichever intro just
+        played, this is the same beat: stop, hand over.
+    #>
+    $grey  = Fg 125 133 144
+    $white = Fg 230 237 243
+    $bar   = [char]0x2588
+
+    Show-Frame "$E[2J"
+
+    $spaced = Get-Spaced
+    $mid = [int]($script:H / 2)
+    $startCol = [int](($script:W - $spaced.Length) / 2) + 1
+    Show-Frame "$(At $mid $startCol)$Bold$white$spaced$Reset"
+    $tag = 'launching claude'
+    Show-Frame "$(At ($mid + 2) ([int](($script:W - $tag.Length) / 2) + 1))$grey$tag$Reset"
+    Start-Sleep -Milliseconds 320
+
+    # Shutters: two bars converge on the centre line, covering the name.
+    $half = [int]($script:W / 2)
+    $stepMs = [Math]::Max(8, [int]($DurationMs * 0.35 / [Math]::Max(1, $half)))
+    for ($i = 0; $i -le $half; $i++) {
+        if (Test-Resized) {
+            $half = [int]($script:W / 2)
+            $mid = [int]($script:H / 2)
+        }
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append((At $mid 1)).Append($AccFg).Append([string]$bar * $i)
+        [void]$sb.Append((At $mid ([Math]::Max(1, $script:W - $i + 1)))).Append($AccFg).Append([string]$bar * $i)
+        [void]$sb.Append($Reset)
+        Show-Frame $sb.ToString()
+        Start-Sleep -Milliseconds $stepMs
+    }
+
+    # Then the closed shutter collapses to a point and goes out.
+    for ($i = $half; $i -ge 0; $i -= 2) {
+        $left = [Math]::Max(1, $half - $i + 1)
+        $len  = [Math]::Max(0, $i * 2)
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append((At $mid 1)).Append((' ' * $script:W))
+        if ($len -gt 0) {
+            [void]$sb.Append((At $mid $left)).Append($AccFg).Append([string]$bar * [Math]::Min($len, $script:W - $left + 1))
+        }
+        [void]$sb.Append($Reset)
+        Show-Frame $sb.ToString()
+        Start-Sleep -Milliseconds 16
+    }
+    Start-Sleep -Milliseconds 180
+}
+
 # --- run ---------------------------------------------------------------------
 if ($Style -eq 'random') {
     $Style = @('matrix', 'bios', 'glitch', 'wave', 'figlet')[$Rand.Next(0, 5)]
@@ -367,14 +498,18 @@ if ($Style -eq 'random') {
 
 try {
     Show-Frame "$E[?25l"          # hide cursor
-    switch ($Style) {
-        'matrix' { Play-Matrix }
-        'bios'   { Play-Bios }
-        'glitch' { Play-Glitch }
-        'wave'   { Play-Wave }
-        'figlet' {
-            # Never leave a window with no animation because Python is missing.
-            if (-not (Play-Figlet)) { Play-Glitch }
+    if ($Phase -eq 'outro') {
+        Play-Outro
+    } else {
+        switch ($Style) {
+            'matrix' { Play-Matrix }
+            'bios'   { Play-Bios }
+            'glitch' { Play-Glitch }
+            'wave'   { Play-Wave }
+            'figlet' {
+                # Never leave a window with no animation because Python is missing.
+                if (-not (Play-Figlet)) { Play-Glitch }
+            }
         }
     }
 } catch {

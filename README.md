@@ -45,6 +45,10 @@ primary monitor, starting in the current directory.
 |---|---|
 | `-Monitor` | `1..N` left-to-right, or `primary` (default), `left`, `right`, `portrait`, or a device name like `DISPLAY6` |
 | `-Count` | how many windows, 1-16; defaults to the number of `-Titles`, or 4 |
+| `-Anim` | animation style; omit to use the saved default |
+| `-AnimMs` | animation length in ms, default 3000 |
+| `-StaggerMs` | gap between window launches, default 300, only past two windows |
+| `-SaveDefaults` | remember this run's `-Anim` / `-AnimMs` / `-StaggerMs` for later launches |
 | `-Titles` | window names |
 | `-WorkingDir` | starting directory for all four windows |
 | `-Gap` | pixels between windows; default `0` |
@@ -89,9 +93,22 @@ Every window plays a short animation before Claude starts. `-Anim` picks one:
 | `figlet` | big block letters via pyfiglet, in a rich panel with a spinner |
 | `off` | no animation |
 
-Four are pure PowerShell. cmd can't animate — no sub-second sleep, no cursor
-control — so the batch shells out to PowerShell for ANSI cursor addressing and
-24-bit colour, with no dependencies.
+The sequence per window is **intro → outro → Claude**, all before the session.
+The outro is the hand-off — the name, `launching claude`, and two accent
+shutters closing across it — so Claude doesn't appear on top of a half-finished
+flourish.
+
+`random` is rolled **once per launch, not per window**: the windows open as a
+set and should read as one machine booting. `-AnimMs` sets the length (default
+3000) and `-StaggerMs` (default 300, only past two windows) offsets them so the
+animations cascade rather than collide.
+
+Every animation **adapts to resize** — window size is re-read each frame and the
+layout rebuilt, so dragging mid-animation reflows instead of tearing.
+
+Four styles are pure PowerShell. cmd can't animate — no sub-second sleep, no
+cursor control — so the batch shells out to PowerShell for ANSI cursor
+addressing and 24-bit colour, with no dependencies.
 
 `figlet` runs `splash.py` (pyfiglet + rich), because real block-letter type
 needs a font database. Missing Python or pyfiglet falls back to `glitch` rather

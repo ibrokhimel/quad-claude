@@ -41,6 +41,9 @@ if "%MODE%"=="" set "MODE=skip"
 set "ANIM=%~4"
 if "%ANIM%"=="" set "ANIM=random"
 
+set "ANIMMS=%~5"
+if "%ANIMMS%"=="" set "ANIMMS=3000"
+
 rem --- theme -----------------------------------------------------------------
 rem One neutral dark background for all four windows. Tinted backgrounds were
 rem tried and dropped: they cut the contrast of everything Claude prints on top,
@@ -116,8 +119,12 @@ set "CLAUDE_CODE_CHILD_SESSION="
 
 rem Boot animation, then the banner. Runs before Claude rather than alongside
 rem it: cmd is sequential, so this is the only slot where it can play.
+rem Intro, then outro, then Claude. The outro is the hand-off: the intro's
+rem flourish is closed out deliberately so the session does not just appear on
+rem top of a half-finished animation. Both run before Claude starts.
 if /i not "%ANIM%"=="off" (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Show-BootAnimation.ps1" -Name "%PANE%" -Index %~2 -Style %ANIM%
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Show-BootAnimation.ps1" -Name "%PANE%" -Index %~2 -Style %ANIM% -Phase intro -DurationMs %ANIMMS%
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Show-BootAnimation.ps1" -Name "%PANE%" -Index %~2 -Phase outro -DurationMs %ANIMMS%
 )
 
 echo.
@@ -165,3 +172,4 @@ if /i "%MODE%"=="safe" (
 ) else (
     call claude --dangerously-skip-permissions
 )
+
