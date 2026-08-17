@@ -78,6 +78,8 @@ param(
     [string[]] $Titles     = @(),
     [string]   $WorkingDir = $PWD.Path,
     [int]      $Gap        = 0,
+    [ValidateSet('random', 'matrix', 'bios', 'glitch', 'wave', 'figlet', 'off')]
+    [string]   $Anim       = 'random',
     [bool]     $SkipPermissions = $true,
     [switch]   $NoClaude,
     [switch]   $DryRun
@@ -375,6 +377,7 @@ function New-WtArgs {
     if ($NoClaude)             { $a.Add('none') }
     elseif ($SkipPermissions)  { $a.Add('skip') }
     else                       { $a.Add('safe') }
+    $a.Add($Anim)
     return $a
 }
 

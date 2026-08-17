@@ -1,6 +1,6 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem  Start-ClaudeWindow.cmd  <name> <1-4> [skip|safe|none]
+rem  Start-ClaudeWindow.cmd  <name> <1-4> [skip|safe|none] [anim]
 rem
 rem  Startup script for one Claude window: colour the terminal, name the
 rem  console, print a banner, then start Claude.
@@ -10,6 +10,8 @@ rem    <1-4>     window number, selects the colour theme
 rem    skip      start Claude with --dangerously-skip-permissions (default)
 rem    safe      start Claude normally, with permission prompts
 rem    none      do not start Claude, just leave a shell (layout testing)
+rem    anim      boot animation: random (default), matrix, bios, glitch,
+rem              wave, or off
 rem
 rem  Lives in its own file rather than inline in the wt.exe command line because
 rem  wt.exe splits its command line on ';' even inside a quoted argument, which
@@ -35,6 +37,9 @@ if "%PANE%"=="" set "PANE=Claude"
 
 set "MODE=%~3"
 if "%MODE%"=="" set "MODE=skip"
+
+set "ANIM=%~4"
+if "%ANIM%"=="" set "ANIM=random"
 
 rem --- theme -----------------------------------------------------------------
 rem One neutral dark background for all four windows. Tinted backgrounds were
@@ -100,6 +105,20 @@ set "P=!P!!OSC!12;!CUR!!ST!"
 
 <nul set /p "=!P!"
 cls
+
+rem Clear the inherited colour block BEFORE the animation, not just before
+rem Claude. The PowerShell animations emit raw ANSI and ignore NO_COLOR, but the
+rem figlet splash renders through rich, which honours it - so with the scrub
+rem happening later the splash came out in monochrome. Repeated after endlocal
+rem below, because endlocal restores whatever this setlocal captured.
+set "NO_COLOR="
+set "CLAUDE_CODE_CHILD_SESSION="
+
+rem Boot animation, then the banner. Runs before Claude rather than alongside
+rem it: cmd is sequential, so this is the only slot where it can play.
+if /i not "%ANIM%"=="off" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Show-BootAnimation.ps1" -Name "%PANE%" -Index %~2 -Style %ANIM%
+)
 
 echo.
 echo  !ESC![%SGR%m  %PANE%  !ESC![0m

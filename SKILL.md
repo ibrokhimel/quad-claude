@@ -165,6 +165,49 @@ Claude was an environment problem and not a terminal one.
 
 All of it is in `Start-ClaudeWindow.cmd` - change it there, in one place.
 
+## Boot animations
+
+Every window plays a short animation before Claude starts. `-Anim` picks one:
+
+| Style | What it does |
+|---|---|
+| `random` | default - a different one per window, every launch |
+| `matrix` | katakana rain that resolves into the window name |
+| `bios` | fake POST checks, then a gradient progress bar |
+| `glitch` | scrambled noise locking into the name, with a chromatic split |
+| `wave` | twin sine waves in cycling hues, name fading up between them |
+| `figlet` | big block letters via pyfiglet, in a rich panel with a spinner |
+| `off` | no animation |
+
+Four are pure PowerShell (`Show-BootAnimation.ps1`). cmd cannot do this itself -
+no sub-second sleep, no cursor control - so the batch shells out to PowerShell,
+which gets ANSI cursor addressing and 24-bit colour with no dependencies.
+
+`figlet` is the exception: it runs `splash.py` (pyfiglet + rich), because real
+block-letter type needs a font database and pyfiglet ships 571. If Python or
+pyfiglet is missing it falls back to `glitch` rather than leaving a blank
+window. The attempt is the availability check - probing first would cost an
+extra interpreter start on every launch.
+
+Animations run before Claude, not alongside it, because cmd is sequential.
+Budget is ~1.7s. Keep it short: this is time the user waits.
+
+### Three traps, all found the hard way
+
+**Console encoding, not font.** Non-ASCII glyphs arrive as `?` unless
+`[Console]::OutputEncoding` is UTF-8 - the console encodes in its code page,
+which has no katakana and no block characters. `?` means mis-encoded; a missing
+glyph would render as a box instead. Same fix on the Python side with
+`sys.stdout.reconfigure(encoding="utf-8")`.
+
+**Grab the writer after setting the encoding.** Assigning `OutputEncoding`
+builds a *new* writer. A handle cached beforehand keeps writing through the old
+encoding, so the fix silently does nothing.
+
+**`NO_COLOR` must be cleared before the animation, not just before Claude.**
+The PowerShell animations emit raw ANSI and ignore it, but rich honours it, so
+the figlet splash rendered in monochrome while the others looked fine.
+
 ## If Claude renders monochrome, it is NO_COLOR
 
 A Claude session sets `NO_COLOR=1` in the environment of every process it

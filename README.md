@@ -75,6 +75,36 @@ every four.
 
 It all lives in `scripts/Start-ClaudeWindow.cmd`.
 
+## Boot animations
+
+Every window plays a short animation before Claude starts. `-Anim` picks one:
+
+| Style | What it does |
+|---|---|
+| `random` | default — a different one per window, every launch |
+| `matrix` | katakana rain resolving into the window name |
+| `bios` | fake POST checks, then a gradient progress bar |
+| `glitch` | scrambled noise locking into the name, with a chromatic split |
+| `wave` | twin sine waves in cycling hues, name fading up between them |
+| `figlet` | big block letters via pyfiglet, in a rich panel with a spinner |
+| `off` | no animation |
+
+Four are pure PowerShell. cmd can't animate — no sub-second sleep, no cursor
+control — so the batch shells out to PowerShell for ANSI cursor addressing and
+24-bit colour, with no dependencies.
+
+`figlet` runs `splash.py` (pyfiglet + rich), because real block-letter type
+needs a font database. Missing Python or pyfiglet falls back to `glitch` rather
+than leaving a blank window.
+
+Budget is ~1.7s, before Claude rather than alongside it — cmd is sequential.
+
+**Three traps, if you fork this:** non-ASCII arrives as `?` unless the console
+encoding is UTF-8 (`?` = mis-encoded; a missing glyph would be a box); the
+writer must be grabbed *after* setting that encoding, since assigning it builds
+a new one; and `NO_COLOR` has to be cleared before the animation, not just
+before Claude, because rich honours it while raw ANSI doesn't.
+
 ## Layouts
 
 Four is the default, not the limit:
