@@ -65,6 +65,7 @@
 [CmdletBinding()]
 param(
     [string]   $Monitor    = 'primary',
+    [int]      $Count      = 0,
     [string[]] $Titles     = @(),
     [string]   $WorkingDir = $PWD.Path,
     [int]      $Gap        = 0,
@@ -137,28 +138,86 @@ function Test-ClaudeProfileLive {
     return ($fragmentTime -lt $oldestStart)
 }
 
-function Get-QuadrantRects {
-    param($WorkingArea, [int]$Gap)
+function Split-Span {
+    <#
+        Cut a span into N pieces that tile it exactly.
 
-    $wa = $WorkingArea
-    # Derive the second half by subtraction, so an odd width or height still
-    # tiles exactly instead of leaving a one-pixel seam.
-    $leftW = [int][math]::Floor(($wa.Width  - $Gap) / 2)
-    $topH  = [int][math]::Floor(($wa.Height - $Gap) / 2)
-    $rightW  = $wa.Width  - $leftW - $Gap
-    $bottomH = $wa.Height - $topH  - $Gap
+        Each boundary is computed from the span's own arithmetic rather than by
+        adding up piece sizes, so rounding cannot accumulate: piece i runs from
+        floor(i*avail/N) to floor((i+1)*avail/N). Whatever the remainder, the
+        pieces still meet edge to edge and still cover the whole span.
+    #>
+    param([int]$Start, [int]$Total, [int]$N, [int]$Gap)
 
-    $x1 = $wa.X
-    $x2 = $wa.X + $leftW + $Gap
-    $y1 = $wa.Y
-    $y2 = $wa.Y + $topH + $Gap
+    $avail = $Total - ($Gap * ($N - 1))
+    $out = @()
+    for ($i = 0; $i -lt $N; $i++) {
+        $a = [int][math]::Floor(($i * $avail) / $N)
+        $b = [int][math]::Floor((($i + 1) * $avail) / $N)
+        $out += @{ Pos = $Start + $a + ($i * $Gap); Size = $b - $a }
+    }
+    return $out
+}
 
-    return @(
-        @{ X = $x1; Y = $y1; W = $leftW;  H = $topH    }   # 1 top-left
-        @{ X = $x2; Y = $y1; W = $rightW; H = $topH    }   # 2 top-right
-        @{ X = $x1; Y = $y2; W = $leftW;  H = $bottomH }   # 3 bottom-left
-        @{ X = $x2; Y = $y2; W = $rightW; H = $bottomH }   # 4 bottom-right
-    )
+function Get-RowPlan {
+    <#
+        How many windows sit in each row, top to bottom.
+
+        1-6 are hand-picked because the obvious arithmetic gives poor shapes at
+        small counts: 3 as two-then-one leaves a lonely wide window, and one
+        tall beside two stacked reads better. Above 6 a balanced grid is fine.
+    #>
+    param([int]$Count)
+
+    switch ($Count) {
+        1 { return @(1) }
+        2 { return @(2) }
+        3 { return 'L' }        # special-cased: one tall left, two stacked right
+        4 { return @(2, 2) }
+        5 { return @(3, 2) }
+        6 { return @(3, 3) }
+        default {
+            $rows  = [int][math]::Ceiling([math]::Sqrt($Count))
+            $base  = [int][math]::Floor($Count / $rows)
+            $extra = $Count % $rows
+            $plan  = @()
+            for ($i = 0; $i -lt $rows; $i++) {
+                $plan += $base + $(if ($i -lt $extra) { 1 } else { 0 })
+            }
+            return $plan
+        }
+    }
+}
+
+function Get-TileRects {
+    param($WorkingArea, [int]$Count, [int]$Gap)
+
+    $wa   = $WorkingArea
+    $plan = Get-RowPlan -Count $Count
+    $out  = @()
+
+    if ($plan -is [string] -and $plan -eq 'L') {
+        # One tall window on the left, two stacked on the right.
+        $cols = @(Split-Span -Start $wa.X -Total $wa.Width  -N 2 -Gap $Gap)
+        $rows = @(Split-Span -Start $wa.Y -Total $wa.Height -N 2 -Gap $Gap)
+        $out += @{ X = $cols[0].Pos; Y = $wa.Y;        W = $cols[0].Size; H = $wa.Height   }
+        $out += @{ X = $cols[1].Pos; Y = $rows[0].Pos; W = $cols[1].Size; H = $rows[0].Size }
+        $out += @{ X = $cols[1].Pos; Y = $rows[1].Pos; W = $cols[1].Size; H = $rows[1].Size }
+        return $out
+    }
+
+    # @() everywhere below is load-bearing: PowerShell unrolls a single-element
+    # array to a scalar on return, and under Set-StrictMode a scalar has no
+    # .Count, so a one-row plan (Count 1 or 2) throws without this.
+    $plan = @($plan)
+    $rows = @(Split-Span -Start $wa.Y -Total $wa.Height -N $plan.Count -Gap $Gap)
+    for ($r = 0; $r -lt $plan.Count; $r++) {
+        $cols = @(Split-Span -Start $wa.X -Total $wa.Width -N $plan[$r] -Gap $Gap)
+        foreach ($c in $cols) {
+            $out += @{ X = $c.Pos; Y = $rows[$r].Pos; W = $c.Size; H = $rows[$r].Size }
+        }
+    }
+    return $out
 }
 
 function Initialize-Win32 {
@@ -255,8 +314,15 @@ if (-not (Test-Path -LiteralPath $WorkingDir)) {
 $dir = (Resolve-Path -LiteralPath $WorkingDir).Path
 if ($dir.Length -gt 3) { $dir = $dir.TrimEnd('\') }   # keep 'C:\' intact
 
+# Count comes from -Count, else from however many names were given, else four.
+if ($Count -le 0) {
+    if ($Titles.Count -gt 0) { $Count = $Titles.Count } else { $Count = 4 }
+}
+if ($Count -lt 1)  { throw "Count must be at least 1." }
+if ($Count -gt 16) { throw "Count of $Count is more than this is meant for; 16 is the ceiling." }
+
 $names = @()
-for ($i = 0; $i -lt 4; $i++) {
+for ($i = 0; $i -lt $Count; $i++) {
     if ($i -lt $Titles.Count -and -not [string]::IsNullOrWhiteSpace($Titles[$i])) {
         $names += $Titles[$i].Trim()
     } else {
@@ -272,7 +338,7 @@ if (-not (Test-Path -LiteralPath $FragmentPath)) {
 }
 $useProfile = Test-ClaudeProfileLive
 
-$rects   = Get-QuadrantRects -WorkingArea $screen.WorkingArea -Gap $Gap
+$rects   = @(Get-TileRects -WorkingArea $screen.WorkingArea -Count $Count -Gap $Gap)
 $paneCmd = Get-SpaceSafePath -Path $PaneScript
 
 function New-WtArgs {
@@ -295,7 +361,8 @@ function New-WtArgs {
     $a.Add('/k')
     $a.Add($paneCmd)
     $a.Add($names[$Index])
-    $a.Add(($Index + 1).ToString())
+    # Four accent themes, cycled, so a fifth window is themed rather than blank.
+    $a.Add((($Index % 4) + 1).ToString())
     if ($NoClaude)             { $a.Add('none') }
     elseif ($SkipPermissions)  { $a.Add('skip') }
     else                       { $a.Add('safe') }
@@ -307,8 +374,9 @@ if ($DryRun) {
     Write-Host "Profile        : $(if ($useProfile) { "'$ProfileName' (fragment loaded)" } else { 'default (fragment not loaded yet)' })"
     Write-Host "Claude         : $(if ($NoClaude) { 'no (-NoClaude)' } elseif ($SkipPermissions) { 'yes, --dangerously-skip-permissions' } else { 'yes, with permission prompts' })"
     Write-Host "Gap            : $Gap px"
+    Write-Host "Windows        : $Count"
     Write-Host ''
-    for ($i = 0; $i -lt 4; $i++) {
+    for ($i = 0; $i -lt $Count; $i++) {
         $r = $rects[$i]
         Write-Host "Window $($i + 1): '$($names[$i])'  ->  x=$($r.X) y=$($r.Y) $($r.W)x$($r.H)"
         Write-Host ('  wt.exe ' + ((New-WtArgs -Index $i) -join ' '))
@@ -321,7 +389,7 @@ if ($DryRun) {
 Initialize-Win32
 $placed = @()
 
-for ($i = 0; $i -lt 4; $i++) {
+for ($i = 0; $i -lt $Count; $i++) {
     $before = @(Get-TerminalWindowHandles)
 
     & wt.exe @(New-WtArgs -Index $i)

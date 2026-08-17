@@ -1,6 +1,6 @@
 ---
 name: quad-claude
-description: Use when the user wants several Claude Code sessions open side by side on one screen - "open 4 claudes", "quad terminal", "give me 4 terminals on monitor 2", "4 claudes on the portrait screen", "tile some claude windows". Opens four separate, named Windows Terminal windows running cmd, tiled flush into the four quadrants of a chosen monitor, each running claude.
+description: Use when the user wants several Claude Code sessions open side by side on one screen, or wants to hand a task to one of them - "open 4 claudes", "quad terminal", "give me 3 terminals on monitor 2", "5 claudes on the portrait screen", "tile some claude windows", "tell the backend one to run the tests". Opens any number of separate, named Windows Terminal windows running cmd, tiled flush across a chosen monitor, each running claude, and can type tasks into them afterwards.
 ---
 
 # Quad Claude
@@ -35,7 +35,8 @@ primary monitor, all starting in the current directory.
 | Parameter | Meaning |
 |---|---|
 | `-Monitor` | `1..N` left-to-right, or `primary` (default), `left`, `right`, `portrait`, or a device-name substring like `DISPLAY6` |
-| `-Titles` | one to four window names; missing ones fill in as `Claude <n>` |
+| `-Count` | how many windows, 1-16. Defaults to the number of `-Titles` given, or 4 |
+| `-Titles` | window names; missing ones fill in as `Claude <n>` |
 | `-WorkingDir` | starting directory for all four windows; defaults to the current directory |
 | `-Gap` | pixels between the tiled windows; default `0` (flush) |
 | `-SkipPermissions` | start Claude with `--dangerously-skip-permissions`. **On by default**; pass `-SkipPermissions:$false` for sessions that should still prompt |
@@ -48,6 +49,59 @@ needs one Enter per window the first time a folder is used.
 
 Always test layout changes with `-NoClaude` first. Four real sessions is a lot
 to throw away because a window landed wrong.
+
+## Layouts
+
+Four is only the default. `-Count` tiles any number from 1 to 16:
+
+```
+2                3                4                5
++-----+-----+    +-----+-----+    +-----+-----+    +---+---+---+
+|     |     |    |     |  2  |    |  1  |  2  |    | 1 | 2 | 3 |
+|  1  |  2  |    |  1  +-----+    +-----+-----+    +---+-+-+---+
+|     |     |    |     |  3  |    |  3  |  4  |    |  4  |  5  |
++-----+-----+    +-----+-----+    +-----+-----+    +-----+-----+
+```
+
+1-6 are hand-picked shapes; above 6 it falls back to a balanced grid of
+`ceil(sqrt(n))` rows with the remainder spread across the top rows. 3 is the
+one worth noting - two-then-one leaves a lonely wide window, so it is one tall
+beside two stacked instead.
+
+Every layout is built by `Split-Span`, which computes each boundary from the
+span's own arithmetic (`floor(i*avail/N)`) rather than by accumulating piece
+sizes. Rounding therefore cannot drift: whatever the remainder, pieces meet
+edge to edge and cover the span exactly. Verified for counts 1-7 by summing
+window areas and checking the total equals the working area exactly.
+
+Accent themes cycle every four, so a fifth window is themed rather than blank.
+
+## Giving a running window a task
+
+`Send-ClaudeTask.ps1` types a prompt into a named window and presses Enter, so
+Claude can hand work to sessions it started:
+
+```powershell
+& "$env:USERPROFILE\.claude\skills\quad-claude\scripts\Send-ClaudeTask.ps1" `
+    -To backend -Task "Review src/auth for race conditions"
+```
+
+`-To all` broadcasts. `-NoSubmit` types without pressing Enter.
+
+Typing is `SendInput` in Unicode mode, not a clipboard paste: the clipboard
+belongs to the user, and per-character delivery sidesteps every quoting problem.
+Keystrokes go to the foreground window, so the target is focused first and
+whatever was focused before is restored afterwards. Newlines in a task are
+collapsed to spaces, because Enter submits and a literal newline would send it
+half-written.
+
+**Targets are resolved through `session.json`, not by window title.** Titles are
+not unique - a stale window left over from an earlier run answers to the same
+name, and a task typed into a dead terminal fails silently, which is the worst
+way for a dispatcher to fail. `Open-QuadClaude.ps1` records the handles it
+creates; `Send-ClaudeTask.ps1` re-validates each against the live window list
+and its title before using it. If state is missing it falls back to title
+matching but refuses when a name is ambiguous rather than guessing.
 
 ## Reading the user's monitor request
 

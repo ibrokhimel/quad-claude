@@ -43,7 +43,8 @@ primary monitor, starting in the current directory.
 | Parameter | Meaning |
 |---|---|
 | `-Monitor` | `1..N` left-to-right, or `primary` (default), `left`, `right`, `portrait`, or a device name like `DISPLAY6` |
-| `-Titles` | one to four window names |
+| `-Count` | how many windows, 1-16; defaults to the number of `-Titles`, or 4 |
+| `-Titles` | window names |
 | `-WorkingDir` | starting directory for all four windows |
 | `-Gap` | pixels between windows; default `0` |
 | `-SkipPermissions` | start Claude with `--dangerously-skip-permissions`; on by default, `-SkipPermissions:$false` to opt out |
@@ -68,6 +69,47 @@ to the live session immediately.
 Backgrounds are dark tints — navy, purple, amber, green — so output stays
 readable on top, and each window is identifiable at a glance. All four share one
 vivid palette. It all lives in `scripts/Start-ClaudePane.cmd`.
+
+## Layouts
+
+Four is the default, not the limit:
+
+```
+2                3                4                5
++-----+-----+    +-----+-----+    +-----+-----+    +---+---+---+
+|     |     |    |     |  2  |    |  1  |  2  |    | 1 | 2 | 3 |
+|  1  |  2  |    |  1  +-----+    +-----+-----+    +---+-+-+---+
+|     |     |    |     |  3  |    |  3  |  4  |    |  4  |  5  |
++-----+-----+    +-----+-----+    +-----+-----+    +-----+-----+
+```
+
+1–6 are hand-picked shapes; above 6 it falls back to a balanced grid. 3 is the
+interesting one — two-then-one leaves a lonely wide window, so it is one tall
+beside two stacked.
+
+Boundaries are computed from the span's own arithmetic (`floor(i*avail/N)`)
+rather than by accumulating sizes, so rounding cannot drift. Verified for
+counts 1–7 by summing window areas against the working area: exact every time.
+
+## Handing a window a task
+
+```powershell
+& "$env:USERPROFILE\.claude\skills\quad-claude\scripts\Send-ClaudeTask.ps1" `
+    -To backend -Task "Review src/auth for race conditions"
+```
+
+Types the prompt into that window's running Claude and presses Enter. `-To all`
+broadcasts, `-NoSubmit` leaves it unsent for review.
+
+`SendInput` in Unicode mode rather than a clipboard paste — the clipboard
+belongs to the user, and per-character delivery sidesteps every quoting problem.
+The target window is focused first (keystrokes follow focus) and whatever was
+focused before is restored after.
+
+Targets resolve through `session.json`, which records the handles the launcher
+created — **not** by window title. Titles are not unique: a stale window from an
+earlier run answers to the same name, and a task typed into a dead terminal
+fails silently. Found that one the hard way.
 
 ## Why it is not just four `wt --pos` calls
 
