@@ -1,6 +1,9 @@
 # Screenshots taken while verifying layouts
 *.png
 
+# ...except the ones the README actually shows
+!docs/*.png
+
 # Local scratch
 scratch/
 *.log

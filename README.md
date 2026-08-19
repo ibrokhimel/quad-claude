@@ -1,23 +1,59 @@
 # quad-claude
 
+**Tile several Claude Code sessions across a monitor — named, colour-coded, and
+scriptable from outside.**
+
+[![platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)](https://github.com/ibrokhimel/quad-claude)
+[![Windows Terminal](https://img.shields.io/badge/Windows%20Terminal-required-4D4D4D)](https://aka.ms/terminal)
+[![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1%20built--in-5391FE)](https://learn.microsoft.com/powershell/)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Open any number of named [Claude Code](https://claude.com/claude-code) sessions
 in separate Windows Terminal windows, tiled flush across whichever monitor you
-name — and hand them tasks from outside.
+name — then hand each of them tasks without touching the keyboard.
 
-```
-+-----------+-----------+
-|  backend  | frontend  |
-+-----------+-----------+
-|   tests   |   notes   |
-+-----------+-----------+
-```
+![Four named Claude sessions tiled across a monitor, each answering a task sent to it](docs/tiled.png)
+
+*Above: `backend` was told to reply `READY-BACKEND` and `notes` to reply
+`READY-NOTES`, both sent from outside the windows. The other two were left
+untouched — dispatch targets one window, it does not broadcast.*
 
 Real windows, not panes: each has its own title bar showing its name, its own
 taskbar entry, and closes on its own. The shell is `cmd`. Four is the default;
 `-Count` takes 1 to 16.
 
 It is also a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills),
-so you can just ask Claude for "4 claudes on my left monitor" and it will run it.
+so you can just ask Claude for *"4 claudes on my left monitor"* and it runs it
+for you.
+
+## What you get
+
+- **Exact tiling.** Windows meet edge to edge, compensating for the invisible
+  ~7px resize border that makes naive tiling leave visible gaps.
+- **Any count, 1 to 16**, with hand-picked layouts for the small numbers.
+- **Named windows.** The name stays in the title bar; Claude can't overwrite it.
+- **Task dispatch.** `Send-ClaudeTask.ps1 -To backend -Task "..."` types straight
+  into a running session — so one Claude can delegate to four others.
+- **Boot animations.** Five styles, one rolled per launch, shared by every window.
+- **Any monitor**, addressed as `1..N` left-to-right, or `primary` / `left` /
+  `right` / `portrait`.
+
+### Boot sequence
+
+![The same animation running across four windows, each offset by the launch stagger](docs/boot-sequence.png)
+
+One style is rolled per launch and shared by every window, so the set reads as
+one machine booting. The 300ms stagger catches them at different points: one
+still in the intro, two mid hand-off, one already done.
+
+![Matrix rain animation filling a terminal window](docs/matrix.png)
+
+### Layouts scale with the count
+
+![Five windows tiled as three across the top and two across the bottom](docs/layout-five.png)
+
+Five windows: three across the top, two across the bottom. Every layout tiles the
+work area exactly — verified by summing window areas against the screen.
 
 ## Install
 
@@ -85,7 +121,7 @@ Every window plays a short animation before Claude starts. `-Anim` picks one:
 
 | Style | What it does |
 |---|---|
-| `random` | default — a different one per window, every launch |
+| `random` | default — one style rolled per launch, shared by every window |
 | `matrix` | katakana rain resolving into the window name |
 | `bios` | fake POST checks, then a gradient progress bar |
 | `glitch` | scrambled noise locking into the name, with a chromatic split |
@@ -114,7 +150,8 @@ addressing and 24-bit colour, with no dependencies.
 needs a font database. Missing Python or pyfiglet falls back to `glitch` rather
 than leaving a blank window.
 
-Budget is ~1.7s, before Claude rather than alongside it — cmd is sequential.
+Budget is ~3s for the intro plus a short outro, all before Claude rather than
+alongside it — cmd is sequential.
 
 **Three traps, if you fork this:** non-ASCII arrives as `?` unless the console
 encoding is UTF-8 (`?` = mis-encoded; a missing glyph would be a box); the
